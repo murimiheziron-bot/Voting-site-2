@@ -1,0 +1,132 @@
+/* ═══════════════════════════════════════════════════
+   PRESIDENTIAL ANNUAL AWARDS — admin-login.css
+   Styles for the admin login page
+═══════════════════════════════════════════════════ */
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse 60% 55% at 25% 55%, rgba(201, 168, 76, 0.08) 0%, transparent 55%),
+    radial-gradient(ellipse 40% 40% at 80% 30%, rgba(201, 168, 76, 0.05) 0%, transparent 50%),
+    var(--dark);
+}
+
+/* ── Page container ── */
+.login-page {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  position: relative;
+  min-height: 100vh;
+}
+
+/* ── Background decorative rings ── */
+.bg-ring {
+  position: fixed;
+  border-radius: 50%;
+  border: 1px solid rgba(201, 168, 76, 0.06);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ring-1 {
+  width: 500px; height: 500px;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.ring-2 {
+  width: 750px; height: 750px;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  border-color: rgba(201, 168, 76, 0.04);
+}
+
+.ring-3 {
+  width: 1020px; height: 1020px;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  border-color: rgba(201, 168, 76, 0.025);
+}
+
+/* ── Card ── */
+.login-card {
+  background: var(--dark2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 48px 44px;
+  max-width: 420px;
+  width: 100%;
+  position: relative;
+  z-index: 1;
+  box-shadow:
+    0 40px 100px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(201, 168, 76, 0.04) inset;
+}
+
+/* ── Header ── */
+.login-header {
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.shield-icon {
+  font-size: 2rem;
+  margin-bottom: 12px;
+  display: block;
+  filter: drop-shadow(0 0 12px rgba(201, 168, 76, 0.4));
+}
+
+.login-title {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.login-sub {
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+/* ── Error message ── */
+.login-error {
+  display: none;
+  background: rgba(255, 71, 87, 0.08);
+  border: 1px solid rgba(255, 71, 87, 0.3);
+  color: var(--danger);
+  font-size: 0.78rem;
+  border-radius: 7px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.login-error.visible { display: block; }
+
+/* ── Footer ── */
+.login-footer {
+  margin-top: 4px;
+  text-align: center;
+}
+
+.login-hint {
+  font-size: 0.68rem;
+  color: var(--muted);
+  margin-top: 16px;
+  opacity: 0.6;
+  letter-spacing: 0.5px;
+}
+
+/* ── Responsive ── */
+@media (max-width: 480px) {
+  .login-card { padding: 36px 24px; }
+  .bg-ring { display: none; }
+}

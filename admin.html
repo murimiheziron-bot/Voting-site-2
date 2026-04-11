@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Dashboard – Presidential Annual Awards</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+
+  <!-- ══ TOPBAR ══ -->
+  <nav class="topbar admin-topbar">
+    <a href="index.html" class="brand">
+      <span class="brand-sup">The</span>
+      <span class="brand-main">Presidential Annual Awards</span>
+    </a>
+    <div class="topbar-right">
+      <span class="admin-badge">⚙ Admin</span>
+      <div class="live-dot" title="Live updates active"></div>
+      <a href="index.html" class="btn-ghost">View Live Site</a>
+      <button class="btn-danger" id="logout-btn">Logout</button>
+    </div>
+  </nav>
+
+  <!-- ══ MAIN CONTENT ══ -->
+  <main class="admin-main">
+
+    <!-- Page Header -->
+    <div class="admin-page-header fade-up">
+      <div>
+        <h1 class="admin-page-title">Voting Control Center</h1>
+        <p class="admin-page-sub">
+          Real-time overview · Auto-refreshes every 5 seconds
+          <span class="refresh-indicator" id="refresh-indicator"></span>
+        </p>
+      </div>
+      <button class="btn-ghost" id="manual-refresh-btn">↻ Refresh Now</button>
+    </div>
+
+    <!-- ── STAT CARDS ── -->
+    <div class="stat-cards fade-up" style="animation-delay:0.08s">
+      <div class="stat-card">
+        <div class="stat-label">Total Votes</div>
+        <div class="stat-value" id="stat-total-votes">0</div>
+        <div class="stat-foot">Across all candidates</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Revenue</div>
+        <div class="stat-value" id="stat-revenue">KES 0</div>
+        <div class="stat-foot">@ KES 20 per vote</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Leading Candidate</div>
+        <div class="stat-value stat-name" id="stat-leader">—</div>
+        <div class="stat-foot" id="stat-leader-votes">No votes yet</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Unique Voters</div>
+        <div class="stat-value" id="stat-unique">0</div>
+        <div class="stat-foot">Individual participants</div>
+      </div>
+    </div>
+
+    <!-- ── RESULTS TABLE ── -->
+    <div class="admin-section fade-up" style="animation-delay:0.14s">
+      <div class="section-title">
+        <span class="live-dot"></span>
+        Candidate Results
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Candidate</th>
+              <th>Votes</th>
+              <th>Share</th>
+              <th>Revenue</th>
+            </tr>
+          </thead>
+          <tbody id="results-tbody">
+            <!-- Injected by admin.js -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── VOTE DISTRIBUTION CHART ── -->
+    <div class="admin-section fade-up" style="animation-delay:0.18s">
+      <div class="section-title">Vote Distribution</div>
+      <div class="dist-chart" id="dist-chart">
+        <!-- Injected by admin.js -->
+      </div>
+    </div>
+
+    <!-- ── VOTER ACTIVITY LOG ── -->
+    <div class="admin-section fade-up" style="animation-delay:0.22s">
+      <div class="log-header">
+        <div class="section-title" style="margin:0">
+          <span class="live-dot"></span>
+          Recent Voter Activity
+        </div>
+        <span class="log-count" id="log-count">0 transactions</span>
+      </div>
+      <div class="voter-log" id="voter-log">
+        <!-- Injected by admin.js -->
+      </div>
+    </div>
+
+  </main>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast">
+    <span class="toast-icon"></span>
+    <span class="toast-msg"></span>
+  </div>
+
+  <!-- Scripts -->
+  <script src="data.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Login – Presidential Annual Awards</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="admin-login.css" />
+</head>
+<body>
+
+  <div class="login-page">
+
+    <!-- Decorative background rings -->
+    <div class="bg-ring ring-1"></div>
+    <div class="bg-ring ring-2"></div>
+    <div class="bg-ring ring-3"></div>
+
+    <div class="login-card fade-up">
+
+      <!-- Brand -->
+      <a href="index.html" class="brand" style="margin-bottom:28px; display:inline-flex;">
+        <span class="brand-sup">The</span>
+        <span class="brand-main">Presidential Annual Awards</span>
+      </a>
+
+      <!-- Header -->
+      <div class="login-header">
+        <div class="shield-icon">🛡</div>
+        <h1 class="login-title">Admin Portal</h1>
+        <p class="login-sub">
+          Authorised personnel only.<br />
+          Enter your credentials to access the control dashboard.
+        </p>
+      </div>
+
+      <!-- Ornament -->
+      <div class="ornament" style="margin:20px auto 28px;">
+        <div class="ornament-line"></div>
+        <div class="ornament-diamond"></div>
+        <div class="ornament-line"></div>
+      </div>
+
+      <!-- Form -->
+      <div class="form-field">
+        <label>Username</label>
+        <input
+          type="text"
+          id="admin-username"
+          placeholder="Enter username"
+          autocomplete="username"
+        />
+      </div>
+
+      <div class="form-field">
+        <label>Password</label>
+        <input
+          type="password"
+          id="admin-password"
+          placeholder="••••••••"
+          autocomplete="current-password"
+        />
+      </div>
+
+      <div class="login-error" id="login-error">
+        ⚠ Incorrect credentials. Please try again.
+      </div>
+
+      <button class="btn-gold" style="width:100%; margin-top:8px;" id="login-btn">
+        Enter Dashboard →
+      </button>
+
+      <div class="login-footer">
+        <a href="index.html" class="btn-ghost" style="width:100%; justify-content:center; margin-top:14px;">
+          ← Back to Voting
+        </a>
+        <p class="login-hint">Default: admin / paa2025</p>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast">
+    <span class="toast-icon"></span>
+    <span class="toast-msg"></span>
+  </div>
+
+  <!-- Scripts -->
+  <script src="data.js"></script>
+  <script src="admin-login.js"></script>
+</body>
+</html>

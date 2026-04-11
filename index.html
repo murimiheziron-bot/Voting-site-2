@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vote – Presidential Annual Awards 2025</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="vote.css" />
+</head>
+<body>
+
+  <!-- ══ TOPBAR ══ -->
+  <nav class="topbar">
+    <a href="index.html" class="brand">
+      <span class="brand-sup">The</span>
+      <span class="brand-main">Presidential Annual Awards</span>
+    </a>
+    <div class="topbar-right">
+      <span class="gold-pill" id="live-total-label">0 Votes Cast</span>
+      <a href="admin-login.html" class="btn-ghost">Admin ↗</a>
+    </div>
+  </nav>
+
+  <!-- ══ HERO ══ -->
+  <section class="hero fade-up">
+    <div class="hero-eyebrow">
+      <span class="ornament-line"></span>
+      Cast Your Vote
+      <span class="ornament-line"></span>
+    </div>
+    <h1 class="hero-title">
+      Presidential<br /><em>Annual Awards</em>
+    </h1>
+    <p class="hero-sub">
+      Vote for your champion · One click · Ksh 20 via M-Pesa
+    </p>
+    <div class="vote-badge">
+      <span class="vote-badge-icon">🗳</span>
+      Vote for just <strong>KES 20</strong> per vote via M-Pesa Paybill
+    </div>
+    <div class="ornament" style="margin-top:36px;">
+      <div class="ornament-line"></div>
+      <div class="ornament-diamond"></div>
+      <div class="ornament-line"></div>
+    </div>
+  </section>
+
+  <!-- ══ CANDIDATES ══ -->
+  <section class="candidates-section">
+    <p class="section-eyebrow">— Select Your Candidate —</p>
+    <div class="candidates-grid" id="candidates-grid">
+      <!-- Injected by vote.js -->
+    </div>
+  </section>
+
+  <!-- ══ LIVE STANDINGS ══ -->
+  <section class="standings-section" id="standings-section">
+    <div class="section-title">
+      <span class="live-dot"></span>
+      Live Standings
+    </div>
+    <div class="standings-bars" id="standings-bars">
+      <!-- Injected by vote.js -->
+    </div>
+  </section>
+
+  <!-- ══ FOOTER ══ -->
+  <footer class="site-footer">
+    Presidential Annual Awards 2025 &nbsp;·&nbsp;
+    M-Pesa Paybill: <strong style="color:var(--gold)">4564811</strong>
+    &nbsp;·&nbsp; Acc: <strong style="color:var(--gold)">Your Name</strong>
+  </footer>
+
+  <!-- ══ PAYMENT MODAL ══ -->
+  <div class="modal-overlay" id="pay-modal">
+    <div class="modal">
+      <button class="modal-close" id="modal-close-btn" aria-label="Close">✕</button>
+
+      <!-- Step 1 · Payment Form -->
+      <div id="step-form">
+        <div class="modal-eyebrow">Presidential Annual Awards</div>
+        <div class="modal-candidate" id="modal-candidate-name">Candidate</div>
+        <p class="modal-sub">Enter your M-Pesa amount — votes are added automatically.</p>
+
+        <div class="mpesa-box">
+          <div class="mpesa-header">
+            <div class="mpesa-logo-icon">M</div>
+            <div>
+              <div class="mpesa-title">M-Pesa Payment</div>
+              <div class="mpesa-subtitle">Lipa Na M-Pesa · Paybill</div>
+            </div>
+          </div>
+          <div class="mpesa-rows">
+            <div class="mpesa-row">
+              <span>Paybill Number</span>
+              <strong>4564811</strong>
+            </div>
+            <div class="mpesa-row">
+              <span>Account Number</span>
+              <strong>Your Name</strong>
+            </div>
+            <div class="mpesa-row">
+              <span>Rate</span>
+              <strong class="gold-text">KES 20 = 1 Vote</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Amount input with live vote counter -->
+        <div class="form-field">
+          <label>Amount to Pay (KES)</label>
+          <input
+            type="number"
+            id="vote-amount"
+            placeholder="e.g. 100"
+            min="20"
+            step="20"
+          />
+        </div>
+
+        <!-- Live vote preview pill -->
+        <div class="vote-preview" id="vote-preview">
+          <span class="preview-label">You will cast</span>
+          <span class="preview-count" id="preview-count">—</span>
+          <span class="preview-label">vote(s)</span>
+        </div>
+
+        <!-- Quick amount buttons -->
+        <div class="quick-amounts">
+          <button class="quick-btn" onclick="setAmount(20)">KES 20<br/><small>1 vote</small></button>
+          <button class="quick-btn" onclick="setAmount(60)">KES 60<br/><small>3 votes</small></button>
+          <button class="quick-btn" onclick="setAmount(100)">KES 100<br/><small>5 votes</small></button>
+          <button class="quick-btn" onclick="setAmount(200)">KES 200<br/><small>10 votes</small></button>
+        </div>
+
+        <div class="form-field" style="margin-top:18px;">
+          <label>Your Full Name</label>
+          <input
+            type="text"
+            id="voter-name"
+            placeholder="e.g. John Kamau"
+            autocomplete="name"
+          />
+        </div>
+
+        <button class="btn-gold" style="width:100%" id="pay-btn">
+          <span>🔒</span> <span id="pay-btn-label">Confirm Vote — KES 20</span>
+        </button>
+
+        <p class="modal-note">
+          You'll receive an M-Pesa STK push on your phone.<br />
+          Enter your PIN to confirm. KES 20 = 1 vote.
+        </p>
+      </div>
+
+      <!-- Step 2 · STK Push Waiting -->
+      <div id="step-stk" style="display:none">
+        <div class="stk-waiting">
+          <div class="spinner"></div>
+          <div class="stk-title">Awaiting Payment…</div>
+          <p class="stk-msg" id="stk-vote-summary"></p>
+          <p class="stk-msg" style="margin-top:8px;">
+            Check your phone and enter your M-Pesa PIN to confirm.
+          </p>
+        </div>
+      </div>
+
+      <!-- Step 3 · Success -->
+      <div id="step-success" style="display:none">
+        <div class="success-wrap">
+          <div class="success-icon">✓</div>
+          <div class="success-title">Vote Confirmed!</div>
+          <p class="success-msg" id="success-msg">Your vote has been recorded.</p>
+          <button class="btn-gold" style="width:100%;margin-top:24px" id="success-close-btn">
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ TOAST ══ -->
+  <div class="toast" id="toast">
+    <span class="toast-icon">🗳</span>
+    <span class="toast-msg"></span>
+  </div>
+
+  <!-- Scripts -->
+  <script src="data.js"></script>
+  <script src="vote.js"></script>
+</body>
+</html>
