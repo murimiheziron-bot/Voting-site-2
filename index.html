@@ -1,452 +1,407 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Vote – Presidential Annual Awards 2025</title>
-  <link rel="stylesheet" href="styles.css" />
-  <link rel="stylesheet" href="vote.css" />
-  <style>
-    /* ══ Extra M-Pesa flow styles (no changes to styles.css / vote.css) ══ */
+<?php
+// ============================================================
+// mpesa_stk.php — Single-file M-Pesa Handler
+// Presidential Annual Awards
+// Handles: STK Push initiation + status poll + manual confirm
+// PUT THIS FILE in the SAME FOLDER as vote.html
+// ============================================================
 
-    /* Progress steps */
-    .progress-steps {
-      display: flex; align-items: center; justify-content: center; gap: 0;
-      margin-bottom: 24px;
-    }
-    /* Make modal scrollable */
-.modal {
-  max-height: 90vh;        /* limit height to viewport */
-  overflow-y: auto;        /* enable vertical scroll */
-  padding-right: 6px;      /* avoid scrollbar overlap */
+// ── Always return JSON, never HTML ──────────────────────────
+header('Content-Type: application/json');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type');
+
+// Kill PHP error display — errors must NOT print HTML into our JSON
+ini_set('display_errors', 0);
+error_reporting(0);
+
+// Handle preflight
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
 }
 
-/* Optional: smoother scrolling */
-.modal::-webkit-scrollbar {
-  width: 6px;
+// ============================================================
+// ★ EDIT THESE — your Daraja credentials
+// ============================================================
+$CONSUMER_KEY    = 'YOUR_CONSUMER_KEY';       // from developer.safaricom.co.ke
+$CONSUMER_SECRET = 'YOUR_CONSUMER_SECRET';    // from developer.safaricom.co.ke
+$SHORTCODE       = '174379';                  // sandbox test shortcode OR your real paybill e.g. 4564811
+$PASSKEY         = 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919'; // sandbox passkey OR your real one
+$CALLBACK_URL    = 'https://yourdomain.com/mpesa_stk.php'; // ← MUST be a public HTTPS URL (not localhost)
+
+// sandbox or production
+$ENV             = 'sandbox'; // change to 'production' when going live
+$BASE_URL        = $ENV === 'production'
+    ? 'https://api.safaricom.co.ke'
+    : 'https://sandbox.safaricom.co.ke';
+
+// ============================================================
+// ★ OPTIONAL: SQLite vote log (auto-created, no DB setup needed)
+//   Set to false if you don't want any local storage
+// ============================================================
+$USE_STORAGE = true;
+$DB_FILE     = __DIR__ . '/votes.db';
+
+// ── Read incoming JSON ────────────────────────────────────
+$raw     = file_get_contents('php://input');
+$payload = json_decode($raw, true);
+
+if (!$payload) {
+    echo json_encode(['success' => false, 'message' => 'Invalid request body']);
+    exit;
 }
 
-.modal::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.15);
-  border-radius: 10px;
+$action = $payload['action'] ?? 'stk_push';
+
+// ============================================================
+// ROUTER
+// ============================================================
+try {
+    switch ($action) {
+        case 'stk_push':
+            handleStkPush($payload, $BASE_URL, $CONSUMER_KEY, $CONSUMER_SECRET, $SHORTCODE, $PASSKEY, $CALLBACK_URL, $USE_STORAGE, $DB_FILE);
+            break;
+
+        case 'poll':
+            handlePoll($payload, $BASE_URL, $CONSUMER_KEY, $CONSUMER_SECRET, $SHORTCODE, $PASSKEY, $USE_STORAGE, $DB_FILE);
+            break;
+
+        case 'manual_confirm':
+            handleManualConfirm($payload, $USE_STORAGE, $DB_FILE);
+            break;
+
+        case 'callback':
+            handleCallback($payload, $USE_STORAGE, $DB_FILE);
+            break;
+
+        default:
+            echo json_encode(['success' => false, 'message' => 'Unknown action: ' . $action]);
+    }
+} catch (Throwable $e) {
+    echo json_encode(['success' => false, 'message' => 'Server error: ' . $e->getMessage()]);
 }
-    /* Make modal scrollable */
-.modal {
-  max-height: 90vh;        /* limit height to viewport */
-  overflow-y: auto;        /* enable vertical scroll */
-  padding-right: 6px;      /* avoid scrollbar overlap */
+
+// ============================================================
+// FUNCTION: Get OAuth token
+// ============================================================
+function getToken($baseUrl, $key, $secret) {
+    $credentials = base64_encode("$key:$secret");
+    $ch = curl_init("$baseUrl/oauth/v1/generate?grant_type=client_credentials");
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER     => ["Authorization: Basic $credentials"],
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+    $res = curl_exec($ch);
+    $err = curl_error($ch);
+    curl_close($ch);
+    if ($err || !$res) return null;
+    $data = json_decode($res, true);
+    return $data['access_token'] ?? null;
 }
 
-/* Optional: smoother scrolling */
-.modal::-webkit-scrollbar {
-  width: 6px;
+// ============================================================
+// FUNCTION: STK Push initiation
+// ============================================================
+function handleStkPush($p, $baseUrl, $key, $secret, $shortcode, $passkey, $callbackUrl, $useDb, $dbFile) {
+    // Validate
+    $phone  = sanitizePhone($p['phone'] ?? '');
+    $amount = (int)($p['amount'] ?? 0);
+
+    if (!$phone) {
+        echo json_encode(['success' => false, 'message' => 'Invalid phone number. Use 07XX or 01XX format.']);
+        return;
+    }
+    if ($amount < 20 || $amount % 20 !== 0) {
+        echo json_encode(['success' => false, 'message' => 'Amount must be a multiple of KES 20.']);
+        return;
+    }
+
+    $candidateId   = $p['candidateId']   ?? '';
+    $candidateName = $p['candidateName'] ?? 'Candidate';
+    $voterName     = $p['voterName']     ?? '';
+    $votes         = (int)($p['votes']   ?? ($amount / 20));
+
+    // Get token
+    $token = getToken($baseUrl, $key, $secret);
+    if (!$token) {
+        echo json_encode(['success' => false, 'message' => 'Could not authenticate with M-Pesa. Check your Consumer Key & Secret.']);
+        return;
+    }
+
+    // Build STK Push body
+    $timestamp = date('YmdHis');
+    $password  = base64_encode($shortcode . $passkey . $timestamp);
+
+    $body = [
+        'BusinessShortCode' => $shortcode,
+        'Password'          => $password,
+        'Timestamp'         => $timestamp,
+        'TransactionType'   => 'CustomerPayBillOnline',
+        'Amount'            => $amount,
+        'PartyA'            => $phone,
+        'PartyB'            => $shortcode,
+        'PhoneNumber'       => $phone,
+        'CallBackURL'       => $callbackUrl . '?action=callback',
+        'AccountReference'  => substr($candidateName, 0, 12),
+        'TransactionDesc'   => 'Vote',
+    ];
+
+    $ch = curl_init("$baseUrl/mpesa/stkpush/v1/processrequest");
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($body),
+        CURLOPT_HTTPHEADER     => [
+            "Authorization: Bearer $token",
+            "Content-Type: application/json",
+        ],
+        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+
+    $res  = curl_exec($ch);
+    $err  = curl_error($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($err) {
+        echo json_encode(['success' => false, 'message' => 'cURL error: ' . $err]);
+        return;
+    }
+
+    $data = json_decode($res, true);
+
+    if (($data['ResponseCode'] ?? '') === '0') {
+        $checkoutId = $data['CheckoutRequestID'];
+
+        // Save to SQLite
+        if ($useDb) {
+            $db = openDb($dbFile);
+            if ($db) {
+                $stmt = $db->prepare(
+                    "INSERT OR IGNORE INTO transactions
+                     (checkout_id, candidate_id, candidate_name, voter_name, phone, amount, votes, status)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING')"
+                );
+                $stmt->execute([$checkoutId, $candidateId, $candidateName, $voterName, $phone, $amount, $votes]);
+            }
+        }
+
+        echo json_encode([
+            'success'           => true,
+            'checkoutRequestId' => $checkoutId,
+            'message'           => 'STK push sent',
+        ]);
+    } else {
+        $msg = $data['errorMessage'] ?? $data['ResponseDescription'] ?? 'STK Push failed. Check your shortcode and passkey.';
+        echo json_encode(['success' => false, 'message' => $msg]);
+    }
 }
 
-.modal::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.15);
-  border-radius: 10px;
+// ============================================================
+// FUNCTION: Poll payment status
+// ============================================================
+function handlePoll($p, $baseUrl, $key, $secret, $shortcode, $passkey, $useDb, $dbFile) {
+    $checkoutId = trim($p['checkoutRequestId'] ?? '');
+    if (!$checkoutId) {
+        echo json_encode(['status' => 'ERROR', 'message' => 'Missing checkoutRequestId']);
+        return;
+    }
+
+    // Check SQLite first (fastest)
+    if ($useDb) {
+        $db = openDb($dbFile);
+        if ($db) {
+            $row = $db->query("SELECT status, mpesa_code, votes FROM transactions WHERE checkout_id = " . $db->quote($checkoutId))->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                if ($row['status'] === 'COMPLETED') {
+                    echo json_encode(['status' => 'COMPLETED', 'mpesaCode' => $row['mpesa_code']]);
+                    return;
+                }
+                if (in_array($row['status'], ['FAILED', 'CANCELLED'])) {
+                    echo json_encode(['status' => $row['status']]);
+                    return;
+                }
+            }
+        }
+    }
+
+    // Query Safaricom API
+    $token = getToken($baseUrl, $key, $secret);
+    if (!$token) {
+        echo json_encode(['status' => 'PENDING']); // keep polling
+        return;
+    }
+
+    $timestamp = date('YmdHis');
+    $password  = base64_encode($shortcode . $passkey . $timestamp);
+
+    $body = [
+        'BusinessShortCode' => $shortcode,
+        'Password'          => $password,
+        'Timestamp'         => $timestamp,
+        'CheckoutRequestID' => $checkoutId,
+    ];
+
+    $ch = curl_init("$baseUrl/mpesa/stkpushquery/v1/query");
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($body),
+        CURLOPT_HTTPHEADER     => [
+            "Authorization: Bearer $token",
+            "Content-Type: application/json",
+        ],
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+
+    $res  = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($code === 200) {
+        $data = json_decode($res, true);
+        $rc   = (string)($data['ResultCode'] ?? '');
+
+        if ($rc === '0') {
+            // SUCCESS — update DB
+            if ($useDb) {
+                $db = openDb($dbFile);
+                if ($db) {
+                    $db->exec("UPDATE transactions SET status='COMPLETED' WHERE checkout_id = " . $db->quote($checkoutId));
+                    addVotes($db, $checkoutId);
+                }
+            }
+            echo json_encode(['status' => 'COMPLETED', 'mpesaCode' => 'API_CONFIRMED']);
+            return;
+        }
+
+        if ($rc !== '') {
+            // Any non-0 result = failed
+            $newStatus = ($rc === '1032') ? 'CANCELLED' : 'FAILED';
+            if ($useDb) {
+                $db = openDb($dbFile);
+                if ($db) $db->exec("UPDATE transactions SET status='$newStatus' WHERE checkout_id = " . $db->quote($checkoutId));
+            }
+            echo json_encode(['status' => $newStatus]);
+            return;
+        }
+    }
+
+    echo json_encode(['status' => 'PENDING']);
 }
 
-/* Ensure overlay doesn't block scrolling */
-.modal-overlay {
-  overflow-y: auto;
-  padding: 20px 10px; /* adds breathing space on small screens */
+// ============================================================
+// FUNCTION: Manual code confirmation
+// ============================================================
+function handleManualConfirm($p, $useDb, $dbFile) {
+    $code       = strtoupper(trim($p['mpesaCode'] ?? ''));
+    $checkoutId = $p['checkoutRequestId'] ?? '';
+
+    if (strlen($code) < 8) {
+        echo json_encode(['success' => false, 'message' => 'Code too short. Enter the full M-Pesa confirmation code.']);
+        return;
+    }
+
+    if ($useDb) {
+        $db = openDb($dbFile);
+        if ($db) {
+            $db->exec("UPDATE transactions SET status='COMPLETED', mpesa_code=" . $db->quote($code) . " WHERE checkout_id = " . $db->quote($checkoutId));
+            addVotes($db, $checkoutId);
+        }
+    }
+
+    echo json_encode(['success' => true, 'mpesaCode' => $code]);
 }
 
-/* Ensure overlay doesn't block scrolling */
-.modal-overlay {
-  overflow-y: auto;
-  padding: 20px 10px; /* adds breathing space on small screens */
+// ============================================================
+// FUNCTION: Safaricom callback (called by Safaricom servers)
+// ============================================================
+function handleCallback($payload, $useDb, $dbFile) {
+    // Log raw callback
+    file_put_contents(__DIR__ . '/mpesa_log.txt', date('[Y-m-d H:i:s] ') . json_encode($payload) . "\n", FILE_APPEND | LOCK_EX);
+
+    $cb          = $payload['Body']['stkCallback']    ?? [];
+    $checkoutId  = $cb['CheckoutRequestID']           ?? '';
+    $resultCode  = (int)($cb['ResultCode']            ?? 1);
+
+    if (!$checkoutId) {
+        echo json_encode(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
+        return;
+    }
+
+    if ($useDb) {
+        $db = openDb($dbFile);
+        if ($db) {
+            if ($resultCode === 0) {
+                $items     = $cb['CallbackMetadata']['Item'] ?? [];
+                $mpesaCode = '';
+                foreach ($items as $item) {
+                    if ($item['Name'] === 'MpesaReceiptNumber') $mpesaCode = $item['Value'] ?? '';
+                }
+                $db->exec("UPDATE transactions SET status='COMPLETED', mpesa_code=" . $db->quote($mpesaCode) . " WHERE checkout_id = " . $db->quote($checkoutId));
+                addVotes($db, $checkoutId);
+            } else {
+                $status = ($resultCode === 1032) ? 'CANCELLED' : 'FAILED';
+                $db->exec("UPDATE transactions SET status='$status' WHERE checkout_id = " . $db->quote($checkoutId));
+            }
+        }
+    }
+
+    echo json_encode(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
 }
-    .ps-dot {
-      width: 28px; height: 28px; border-radius: 50%;
-      border: 2px solid rgba(255,255,255,0.12);
-      background: transparent;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 11px; font-weight: 700; color: rgba(255,255,255,0.3);
-      transition: all 0.3s; position: relative; z-index: 1;
+
+// ============================================================
+// HELPERS
+// ============================================================
+function sanitizePhone($raw) {
+    $p = preg_replace('/[\s\-]/', '', $raw);
+    if (substr($p, 0, 1) === '0') $p = '254' . substr($p, 1);
+    if (substr($p, 0, 1) === '+') $p = substr($p, 1);
+    if (preg_match('/^254(7|1)\d{8}$/', $p)) return $p;
+    return null;
+}
+
+function openDb($file) {
+    try {
+        $db = new PDO("sqlite:$file");
+        $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $db->exec("
+            CREATE TABLE IF NOT EXISTS transactions (
+                checkout_id    TEXT PRIMARY KEY,
+                candidate_id   TEXT,
+                candidate_name TEXT,
+                voter_name     TEXT,
+                phone          TEXT,
+                amount         INTEGER DEFAULT 0,
+                votes          INTEGER DEFAULT 0,
+                mpesa_code     TEXT DEFAULT '',
+                status         TEXT DEFAULT 'PENDING',
+                created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS candidate_votes (
+                candidate_id   TEXT PRIMARY KEY,
+                candidate_name TEXT,
+                total_votes    INTEGER DEFAULT 0
+            );
+        ");
+        return $db;
+    } catch (Exception $e) {
+        return null;
     }
-    .ps-dot.active { border-color: var(--gold); color: var(--gold); }
-    .ps-dot.done   { border-color: #22c55e; background: #22c55e; color: #fff; }
-    .ps-line {
-      flex: 1; height: 2px; max-width: 60px;
-      background: rgba(255,255,255,0.08); transition: background 0.3s;
-    }
-    .ps-line.done { background: var(--gold); }
+}
 
-    /* STK phone badge */
-    .stk-phone-display {
-      display: inline-block;
-      background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25);
-      border-radius: 8px; padding: 5px 16px;
-      font-size: 14px; font-weight: 700; color: #22c55e;
-      margin: 10px 0 6px;
-    }
-
-    /* STK instruction steps */
-    .stk-steps {
-      text-align: left; background: rgba(255,255,255,0.03);
-      border-radius: 10px; padding: 13px 15px;
-      margin: 14px 0 10px;
-      display: flex; flex-direction: column; gap: 8px;
-    }
-    .stk-step {
-      display: flex; align-items: center; gap: 10px;
-      font-size: 12.5px; color: rgba(255,255,255,0.4);
-    }
-    .stk-step-num {
-      width: 20px; height: 20px; border-radius: 50%;
-      background: rgba(255,255,255,0.07); color: var(--gold);
-      font-size: 10px; font-weight: 700;
-      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-    }
-    .stk-step.done-step { color: rgba(255,255,255,0.7); }
-    .stk-step.done-step .stk-step-num { background: #22c55e; color: #fff; }
-
-    /* Countdown */
-    .stk-timer { font-size: 11.5px; color: rgba(255,255,255,0.3); margin-bottom: 4px; }
-    .stk-timer span { color: var(--gold); font-weight: 600; }
-
-    /* Manual confirm fallback */
-    .manual-confirm-section {
-      margin-top: 14px; padding: 14px 15px;
-      background: rgba(201,168,76,0.05);
-      border: 1px solid rgba(201,168,76,0.2); border-radius: 10px;
-    }
-    .manual-confirm-title {
-      font-size: 11px; font-weight: 700; color: var(--gold);
-      text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 5px;
-    }
-    .manual-confirm-desc {
-      font-size: 11.5px; color: rgba(255,255,255,0.4); line-height: 1.5; margin-bottom: 10px;
-    }
-    .manual-confirm-section input {
-      width: 100%; padding: 9px 12px;
-      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 8px; color: #fff; font-size: 13px; font-family: monospace;
-      letter-spacing: 0.08em; outline: none; margin-bottom: 8px;
-      transition: border-color 0.2s;
-    }
-    .manual-confirm-section input:focus { border-color: var(--gold); }
-    .manual-confirm-section input::placeholder {
-      color: rgba(255,255,255,0.2); font-family: inherit; letter-spacing: 0;
-    }
-
-    /* Cancel + manual confirm buttons */
-    .btn-outline {
-      width: 100%; padding: 10px; background: transparent;
-      border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
-      color: rgba(255,255,255,0.35); font-size: 12.5px; cursor: pointer;
-      transition: all 0.2s; margin-top: 10px; font-family: inherit;
-    }
-    .btn-outline:hover { border-color: rgba(255,255,255,0.3); color: rgba(255,255,255,0.6); }
-
-    .btn-manual-confirm {
-      width: 100%; padding: 10px;
-      background: linear-gradient(135deg, #8a6f2e, var(--gold));
-      border: none; border-radius: 8px; color: #000;
-      font-size: 13px; font-weight: 700; cursor: pointer;
-      transition: opacity 0.2s; font-family: inherit;
-    }
-    .btn-manual-confirm:hover    { opacity: 0.88; }
-    .btn-manual-confirm:disabled { opacity: 0.45; cursor: not-allowed; }
-
-    /* Success detail box */
-    .success-details {
-      background: rgba(34,197,94,0.06); border: 1px solid rgba(34,197,94,0.18);
-      border-radius: 10px; padding: 13px 15px; margin: 16px 0; text-align: left;
-    }
-    .success-detail-row {
-      display: flex; justify-content: space-between; align-items: center;
-      font-size: 12.5px; padding: 5px 0;
-      border-bottom: 1px solid rgba(255,255,255,0.05);
-    }
-    .success-detail-row:last-child { border-bottom: none; }
-    .success-detail-row span:first-child { color: rgba(255,255,255,0.4); }
-    .success-detail-row span:last-child  { color: #fff; font-weight: 600; }
-
-    /* Button spinner */
-    .btn-spinner {
-      display: inline-block; width: 15px; height: 15px;
-      border: 2px solid rgba(0,0,0,0.2); border-top-color: #000;
-      border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* Toast error */
-    .toast.error { border-color: rgba(239,68,68,0.45); }
-
-    /* Phone field */
-    #voter-phone { letter-spacing: 0.04em; }
-  </style>
-</head>
-<body>
-
-  <!-- ══ TOPBAR ══ -->
-  <nav class="topbar">
-    <a href="index.html" class="brand">
-      <span class="brand-sup">The</span>
-      <span class="brand-main">Presidential Annual Awards</span>
-    </a>
-    <div class="topbar-right">
-      <span class="gold-pill" id="live-total-label">0 Votes Cast</span>
-      <a href="admin-login.html" class="btn-ghost">Admin ↗</a>
-    </div>
-  </nav>
-
-  <!-- ══ HERO ══ -->
-  <section class="hero fade-up">
-    <div class="hero-eyebrow">
-      <span class="ornament-line"></span>
-      Cast Your Vote
-      <span class="ornament-line"></span>
-    </div>
-    <h1 class="hero-title">
-      Presidential<br /><em>Annual Awards</em>
-    </h1>
-    <p class="hero-sub">
-      Vote for your champion · One click · Ksh 20 via M-Pesa
-    </p>
-    <div class="vote-badge">
-      <span class="vote-badge-icon">🗳</span>
-      Vote for just <strong>KES 20</strong> per vote via M-Pesa Paybill
-    </div>
-    <div class="ornament" style="margin-top:36px;">
-      <div class="ornament-line"></div>
-      <div class="ornament-diamond"></div>
-      <div class="ornament-line"></div>
-    </div>
-  </section>
-
-  <!-- ══ CANDIDATES ══ -->
-  <section class="candidates-section">
-    <p class="section-eyebrow">— Select Your Candidate —</p>
-    <div class="candidates-grid" id="candidates-grid">
-      <!-- Injected by vote.js — images from images/mariga.jpg etc. are preserved -->
-    </div>
-  </section>
-
-  <!-- ══ LIVE STANDINGS ══ -->
-  <section class="standings-section" id="standings-section">
-    <div class="section-title">
-      <span class="live-dot"></span>
-      Live Standings
-    </div>
-    <div class="standings-bars" id="standings-bars">
-      <!-- Injected by vote.js -->
-    </div>
-  </section>
-
-  <!-- ══ FOOTER ══ -->
-  <footer class="site-footer">
-    Presidential Annual Awards 2025 &nbsp;·&nbsp;
-    M-Pesa Paybill: <strong style="color:var(--gold)">4564811</strong>
-    &nbsp;·&nbsp; Acc: <strong style="color:var(--gold)">Your Name</strong>
-  </footer>
-
-  <!-- ══════════════════════════════════════════════════
-       PAYMENT MODAL — 3-Step M-Pesa STK Push Flow
-  ═══════════════════════════════════════════════════ -->
-  <div class="modal-overlay" id="pay-modal">
-    <div class="modal">
-      <button class="modal-close" id="modal-close-btn" aria-label="Close">✕</button>
-
-      <!-- Progress indicator -->
-      <div class="progress-steps">
-        <div class="ps-dot active" id="ps1">1</div>
-        <div class="ps-line"       id="ps-line1"></div>
-        <div class="ps-dot"        id="ps2">2</div>
-        <div class="ps-line"       id="ps-line2"></div>
-        <div class="ps-dot"        id="ps3">3</div>
-      </div>
-
-      <!-- ══ STEP 1 — Payment Form ══ -->
-      <div id="step-form">
-        <div class="modal-eyebrow">Presidential Annual Awards</div>
-        <div class="modal-candidate" id="modal-candidate-name">Candidate</div>
-        <p class="modal-sub">
-          Enter your Safaricom number — an M-Pesa prompt will be sent to your phone.
-        </p>
-
-        <div class="mpesa-box">
-          <div class="mpesa-header">
-            <div class="mpesa-logo-icon">M</div>
-            <div>
-              <div class="mpesa-title">M-Pesa Payment</div>
-              <div class="mpesa-subtitle">Lipa Na M-Pesa · Paybill</div>
-            </div>
-          </div>
-          <div class="mpesa-rows">
-            <div class="mpesa-row">
-              <span>Paybill Number</span>
-              <strong>4564811</strong>
-            </div>
-            <div class="mpesa-row">
-              <span>Account Number</span>
-              <strong id="mpesa-acc-display">Your Name</strong>
-            </div>
-            <div class="mpesa-row">
-              <span>Rate</span>
-              <strong class="gold-text">KES 20 = 1 Vote</strong>
-            </div>
-          </div>
-        </div>
-
-        <!-- Phone — REQUIRED for real STK Push -->
-        <div class="form-field">
-          <label>M-Pesa Phone Number *</label>
-          <input
-            type="tel"
-            id="voter-phone"
-            placeholder="e.g. 0712 345 678"
-            autocomplete="tel"
-            maxlength="13"
-          />
-        </div>
-
-        <!-- Amount -->
-        <div class="form-field">
-          <label>Amount to Pay (KES) *</label>
-          <input
-            type="number"
-            id="vote-amount"
-            placeholder="e.g. 100"
-            min="20"
-            step="20"
-          />
-        </div>
-
-        <!-- Live vote preview -->
-        <div class="vote-preview" id="vote-preview">
-          <span class="preview-label">You will cast</span>
-          <span class="preview-count" id="preview-count">—</span>
-          <span class="preview-label">vote(s)</span>
-        </div>
-
-        <!-- Quick amounts -->
-        <div class="quick-amounts">
-          <button class="quick-btn" onclick="setAmount(20)">KES 20<br/><small>1 vote</small></button>
-          <button class="quick-btn" onclick="setAmount(60)">KES 60<br/><small>3 votes</small></button>
-          <button class="quick-btn" onclick="setAmount(100)">KES 100<br/><small>5 votes</small></button>
-          <button class="quick-btn" onclick="setAmount(200)">KES 200<br/><small>10 votes</small></button>
-        </div>
-
-        <!-- Voter name -->
-        <div class="form-field" style="margin-top:16px;">
-          <label>Your Full Name *</label>
-          <input
-            type="text"
-            id="voter-name"
-            placeholder="e.g. John Kamau"
-            autocomplete="name"
-          />
-        </div>
-
-        <!-- This button now fires REAL STK Push -->
-        <button class="btn-gold" style="width:100%;margin-top:4px" id="pay-btn">
-          <span>📲</span> <span id="pay-btn-label">Send M-Pesa Prompt — KES 20</span>
-        </button>
-
-        <p class="modal-note">
-          An M-Pesa STK push will appear on your phone.<br/>
-          Enter your PIN to confirm. Votes are added automatically.
-        </p>
-      </div>
-
-      <!-- ══ STEP 2 — Awaiting Payment ══ -->
-      <div id="step-stk" style="display:none">
-        <div class="stk-waiting">
-          <div class="spinner"></div>
-          <div class="stk-title">Check Your Phone</div>
-
-          <p class="stk-msg">An M-Pesa prompt has been sent to:</p>
-          <div class="stk-phone-display" id="stk-phone-display">+254 7XX XXX XXX</div>
-          <p class="stk-msg" id="stk-vote-summary"></p>
-
-          <div class="stk-steps">
-            <div class="stk-step done-step">
-              <div class="stk-step-num">✓</div>
-              <span>M-Pesa prompt sent to your phone</span>
-            </div>
-            <div class="stk-step">
-              <div class="stk-step-num">2</div>
-              <span>Open the popup &amp; enter your M-Pesa PIN</span>
-            </div>
-            <div class="stk-step">
-              <div class="stk-step-num">3</div>
-              <span>Your vote is recorded automatically</span>
-            </div>
-          </div>
-
-          <div class="stk-timer">
-            Prompt expires in <span id="stk-countdown">120</span>s
-          </div>
-
-          <!-- Shown after 30s if auto-confirm is slow -->
-          <div class="manual-confirm-section" id="manual-confirm-section" style="display:none">
-            <div class="manual-confirm-title">✅ Already paid? Enter your code</div>
-            <div class="manual-confirm-desc">
-              If automatic confirmation is delayed, paste your M-Pesa
-              confirmation code to verify your vote instantly.
-            </div>
-            <input
-              type="text"
-              id="mpesa-code"
-              placeholder="e.g. QJK7XXXXXX"
-              maxlength="12"
-              oninput="this.value=this.value.toUpperCase()"
-            />
-            <button class="btn-manual-confirm" id="manual-confirm-btn">
-              Confirm with M-Pesa Code
-            </button>
-          </div>
-
-          <button class="btn-outline" id="cancel-stk-btn">← Cancel</button>
-        </div>
-      </div>
-
-      <!-- ══ STEP 3 — Success ══ -->
-      <div id="step-success" style="display:none">
-        <div class="success-wrap">
-          <div class="success-icon">✓</div>
-          <div class="success-title">Vote Confirmed!</div>
-          <p class="success-msg">Your vote has been recorded successfully.</p>
-
-          <div class="success-details">
-            <div class="success-detail-row">
-              <span>Candidate</span><span id="s-candidate">—</span>
-            </div>
-            <div class="success-detail-row">
-              <span>Votes Added</span><span id="s-votes">—</span>
-            </div>
-            <div class="success-detail-row">
-              <span>Amount Paid</span><span id="s-amount">—</span>
-            </div>
-            <div class="success-detail-row">
-              <span>M-Pesa Code</span><span id="s-code">—</span>
-            </div>
-            <div class="success-detail-row">
-              <span>Voter</span><span id="s-voter">—</span>
-            </div>
-          </div>
-
-          <button class="btn-gold" style="width:100%;margin-top:8px" id="success-close-btn">
-            Done — View Standings
-          </button>
-        </div>
-      </div>
-
-    </div><!-- /.modal -->
-  </div><!-- /.modal-overlay -->
-
-  <!-- ══ TOAST ══ -->
-  <div class="toast" id="toast">
-    <span class="toast-icon">🗳</span>
-    <span class="toast-msg"></span>
-  </div>
-
-  <!-- data.js must load before vote.js -->
-  <script src="data.js"></script>
-  <script src="vote.js"></script>
-</body>
-</html>
+function addVotes($db, $checkoutId) {
+    $row = $db->query("SELECT candidate_id, candidate_name, votes FROM transactions WHERE checkout_id = " . $db->quote($checkoutId))->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return;
+    $db->exec("
+        INSERT INTO candidate_votes (candidate_id, candidate_name, total_votes)
+        VALUES (" . $db->quote($row['candidate_id']) . ", " . $db->quote($row['candidate_name']) . ", " . (int)$row['votes'] . ")
+        ON CONFLICT(candidate_id) DO UPDATE SET total_votes = total_votes + " . (int)$row['votes']
+    );
+}
