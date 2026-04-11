@@ -7,20 +7,110 @@
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="vote.css" />
   <style>
-    /* ══ Extra M-Pesa flow styles (no changes to styles.css / vote.css) ══ */
+    /* ══════════════════════════════════════════════════════
+       SCROLLABLE MODAL FIX
+       Overrides whatever vote.css sets on .modal-overlay
+       and .modal to guarantee scrollability everywhere.
+    ══════════════════════════════════════════════════════ */
 
-    /* Progress steps */
+    /* 1. Overlay — fixed, full-screen, itself scrolls on tiny screens */
+    .modal-overlay {
+      position: fixed !important;
+      inset: 0 !important;
+      z-index: 9999 !important;
+      display: flex !important;
+      align-items: flex-start !important;
+      justify-content: center !important;
+      padding: 16px 12px 24px !important;
+      overflow-y: auto !important;
+      -webkit-overflow-scrolling: touch !important;
+      background: rgba(0, 0, 0, 0.84) !important;
+      backdrop-filter: blur(7px) !important;
+      -webkit-backdrop-filter: blur(7px) !important;
+      /* hidden by default — vote.js toggles .open */
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+    }
+    .modal-overlay.open {
+      opacity: 1 !important;
+      pointer-events: all !important;
+    }
+
+    /* 2. Modal box — key: overflow-y: auto + constrained max-height */
+    .modal {
+      position: relative !important;
+      width: 100% !important;
+      max-width: 460px !important;
+      /* dvh = dynamic viewport height (accounts for mobile browser chrome) */
+      max-height: calc(100dvh - 40px) !important;
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
+      -webkit-overflow-scrolling: touch !important;
+      overscroll-behavior-y: contain !important;
+      border-radius: 18px !important;
+      padding: 28px 22px 30px !important;
+      /* thin gold scrollbar */
+      scrollbar-width: thin;
+      scrollbar-color: rgba(201,168,76,0.35) transparent;
+    }
+    .modal::-webkit-scrollbar       { width: 4px; }
+    .modal::-webkit-scrollbar-track { background: transparent; }
+    .modal::-webkit-scrollbar-thumb { background: rgba(201,168,76,0.4); border-radius: 4px; }
+
+    /* 3. Lock body scroll when modal is open */
+    body.modal-open {
+      overflow: hidden !important;
+      /* iOS needs this too */
+      position: fixed;
+      width: 100%;
+    }
+
+    /* 4. Mobile: slide up from bottom like a sheet */
+    @media (max-width: 520px) {
+      .modal-overlay {
+        align-items: flex-end !important;
+        padding: 0 !important;
+      }
+      .modal {
+        border-radius: 22px 22px 0 0 !important;
+        max-height: 93dvh !important;
+        padding: 20px 18px 32px !important;
+      }
+    }
+
+    /* ═══ Scroll-down hint (fades away when at bottom) ═══ */
+    .scroll-hint {
+      position: sticky;
+      bottom: -30px;
+      margin: 0 -22px -30px;
+      height: 44px;
+      background: linear-gradient(to top, rgba(18,18,18,1) 40%, transparent);
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      padding-bottom: 6px;
+      pointer-events: none;
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      color: rgba(201,168,76,0.45);
+      text-transform: uppercase;
+      transition: opacity 0.3s;
+    }
+    /* JS hides it once scrolled to bottom */
+
+    /* ══ Progress steps ══ */
     .progress-steps {
-      display: flex; align-items: center; justify-content: center; gap: 0;
-      margin-bottom: 24px;
+      display: flex; align-items: center; justify-content: center;
+      gap: 0; margin-bottom: 22px;
     }
     .ps-dot {
       width: 28px; height: 28px; border-radius: 50%;
-      border: 2px solid rgba(255,255,255,0.12);
+      border: 2px solid rgba(255,255,255,0.13);
       background: transparent;
       display: flex; align-items: center; justify-content: center;
       font-size: 11px; font-weight: 700; color: rgba(255,255,255,0.3);
-      transition: all 0.3s; position: relative; z-index: 1;
+      transition: all 0.3s; position: relative; z-index: 1; flex-shrink: 0;
     }
     .ps-dot.active { border-color: var(--gold); color: var(--gold); }
     .ps-dot.done   { border-color: #22c55e; background: #22c55e; color: #fff; }
@@ -30,21 +120,19 @@
     }
     .ps-line.done { background: var(--gold); }
 
-    /* STK phone badge */
+    /* ══ STK phone badge ══ */
     .stk-phone-display {
       display: inline-block;
       background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25);
       border-radius: 8px; padding: 5px 16px;
-      font-size: 14px; font-weight: 700; color: #22c55e;
-      margin: 10px 0 6px;
+      font-size: 14px; font-weight: 700; color: #22c55e; margin: 10px 0 6px;
     }
 
-    /* STK instruction steps */
+    /* ══ STK instruction steps ══ */
     .stk-steps {
       text-align: left; background: rgba(255,255,255,0.03);
       border-radius: 10px; padding: 13px 15px;
-      margin: 14px 0 10px;
-      display: flex; flex-direction: column; gap: 8px;
+      margin: 14px 0 10px; display: flex; flex-direction: column; gap: 8px;
     }
     .stk-step {
       display: flex; align-items: center; gap: 10px;
@@ -56,18 +144,18 @@
       font-size: 10px; font-weight: 700;
       display: flex; align-items: center; justify-content: center; flex-shrink: 0;
     }
-    .stk-step.done-step { color: rgba(255,255,255,0.7); }
-    .stk-step.done-step .stk-step-num { background: #22c55e; color: #fff; }
+    .stk-step.done-step                  { color: rgba(255,255,255,0.72); }
+    .stk-step.done-step .stk-step-num    { background: #22c55e; color: #fff; }
 
-    /* Countdown */
+    /* ══ Countdown ══ */
     .stk-timer { font-size: 11.5px; color: rgba(255,255,255,0.3); margin-bottom: 4px; }
     .stk-timer span { color: var(--gold); font-weight: 600; }
 
-    /* Manual confirm fallback */
+    /* ══ Manual confirm box ══ */
     .manual-confirm-section {
       margin-top: 14px; padding: 14px 15px;
-      background: rgba(201,168,76,0.05);
-      border: 1px solid rgba(201,168,76,0.2); border-radius: 10px;
+      background: rgba(201,168,76,0.05); border: 1px solid rgba(201,168,76,0.2);
+      border-radius: 10px;
     }
     .manual-confirm-title {
       font-size: 11px; font-weight: 700; color: var(--gold);
@@ -79,16 +167,16 @@
     .manual-confirm-section input {
       width: 100%; padding: 9px 12px;
       background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 8px; color: #fff; font-size: 13px; font-family: monospace;
-      letter-spacing: 0.08em; outline: none; margin-bottom: 8px;
-      transition: border-color 0.2s;
+      border-radius: 8px; color: #fff; font-size: 13px;
+      font-family: monospace; letter-spacing: 0.08em;
+      outline: none; margin-bottom: 8px; transition: border-color 0.2s;
     }
     .manual-confirm-section input:focus { border-color: var(--gold); }
     .manual-confirm-section input::placeholder {
       color: rgba(255,255,255,0.2); font-family: inherit; letter-spacing: 0;
     }
 
-    /* Cancel + manual confirm buttons */
+    /* ══ Buttons ══ */
     .btn-outline {
       width: 100%; padding: 10px; background: transparent;
       border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
@@ -107,7 +195,7 @@
     .btn-manual-confirm:hover    { opacity: 0.88; }
     .btn-manual-confirm:disabled { opacity: 0.45; cursor: not-allowed; }
 
-    /* Success detail box */
+    /* ══ Success details ══ */
     .success-details {
       background: rgba(34,197,94,0.06); border: 1px solid rgba(34,197,94,0.18);
       border-radius: 10px; padding: 13px 15px; margin: 16px 0; text-align: left;
@@ -121,18 +209,18 @@
     .success-detail-row span:first-child { color: rgba(255,255,255,0.4); }
     .success-detail-row span:last-child  { color: #fff; font-weight: 600; }
 
-    /* Button spinner */
+    /* ══ Button spinner ══ */
     .btn-spinner {
       display: inline-block; width: 15px; height: 15px;
       border: 2px solid rgba(0,0,0,0.2); border-top-color: #000;
-      border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle;
+      border-radius: 50%; animation: _spin 0.8s linear infinite; vertical-align: middle;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes _spin { to { transform: rotate(360deg); } }
 
-    /* Toast error */
-    .toast.error { border-color: rgba(239,68,68,0.45); }
+    /* ══ Toast error tint ══ */
+    .toast.error { border-color: rgba(239,68,68,0.45) !important; }
 
-    /* Phone field */
+    /* ══ Phone field ══ */
     #voter-phone { letter-spacing: 0.04em; }
   </style>
 </head>
@@ -178,7 +266,7 @@
   <section class="candidates-section">
     <p class="section-eyebrow">— Select Your Candidate —</p>
     <div class="candidates-grid" id="candidates-grid">
-      <!-- Injected by vote.js — images from images/mariga.jpg etc. are preserved -->
+      <!-- Injected by vote.js — images/mariga.jpg etc. are preserved -->
     </div>
   </section>
 
@@ -204,10 +292,13 @@
        PAYMENT MODAL — 3-Step M-Pesa STK Push Flow
   ═══════════════════════════════════════════════════ -->
   <div class="modal-overlay" id="pay-modal">
-    <div class="modal">
+
+    <div class="modal" id="modal-inner">
+
+      <!-- Close button -->
       <button class="modal-close" id="modal-close-btn" aria-label="Close">✕</button>
 
-      <!-- Progress indicator -->
+      <!-- Progress dots -->
       <div class="progress-steps">
         <div class="ps-dot active" id="ps1">1</div>
         <div class="ps-line"       id="ps-line1"></div>
@@ -234,52 +325,40 @@
           </div>
           <div class="mpesa-rows">
             <div class="mpesa-row">
-              <span>Paybill Number</span>
-              <strong>4564811</strong>
+              <span>Paybill Number</span><strong>4564811</strong>
             </div>
             <div class="mpesa-row">
-              <span>Account Number</span>
-              <strong id="mpesa-acc-display">Your Name</strong>
+              <span>Account Number</span><strong id="mpesa-acc-display">Your Name</strong>
             </div>
             <div class="mpesa-row">
-              <span>Rate</span>
-              <strong class="gold-text">KES 20 = 1 Vote</strong>
+              <span>Rate</span><strong class="gold-text">KES 20 = 1 Vote</strong>
             </div>
           </div>
         </div>
 
-        <!-- Phone — REQUIRED for real STK Push -->
         <div class="form-field">
           <label>M-Pesa Phone Number *</label>
           <input
-            type="tel"
-            id="voter-phone"
+            type="tel" id="voter-phone"
             placeholder="e.g. 0712 345 678"
-            autocomplete="tel"
-            maxlength="13"
+            autocomplete="tel" maxlength="13"
           />
         </div>
 
-        <!-- Amount -->
         <div class="form-field">
           <label>Amount to Pay (KES) *</label>
           <input
-            type="number"
-            id="vote-amount"
-            placeholder="e.g. 100"
-            min="20"
-            step="20"
+            type="number" id="vote-amount"
+            placeholder="e.g. 100" min="20" step="20"
           />
         </div>
 
-        <!-- Live vote preview -->
         <div class="vote-preview" id="vote-preview">
           <span class="preview-label">You will cast</span>
           <span class="preview-count" id="preview-count">—</span>
           <span class="preview-label">vote(s)</span>
         </div>
 
-        <!-- Quick amounts -->
         <div class="quick-amounts">
           <button class="quick-btn" onclick="setAmount(20)">KES 20<br/><small>1 vote</small></button>
           <button class="quick-btn" onclick="setAmount(60)">KES 60<br/><small>3 votes</small></button>
@@ -287,18 +366,14 @@
           <button class="quick-btn" onclick="setAmount(200)">KES 200<br/><small>10 votes</small></button>
         </div>
 
-        <!-- Voter name -->
         <div class="form-field" style="margin-top:16px;">
           <label>Your Full Name *</label>
           <input
-            type="text"
-            id="voter-name"
-            placeholder="e.g. John Kamau"
-            autocomplete="name"
+            type="text" id="voter-name"
+            placeholder="e.g. John Kamau" autocomplete="name"
           />
         </div>
 
-        <!-- This button now fires REAL STK Push -->
         <button class="btn-gold" style="width:100%;margin-top:4px" id="pay-btn">
           <span>📲</span> <span id="pay-btn-label">Send M-Pesa Prompt — KES 20</span>
         </button>
@@ -307,14 +382,13 @@
           An M-Pesa STK push will appear on your phone.<br/>
           Enter your PIN to confirm. Votes are added automatically.
         </p>
-      </div>
+      </div><!-- /#step-form -->
 
       <!-- ══ STEP 2 — Awaiting Payment ══ -->
       <div id="step-stk" style="display:none">
         <div class="stk-waiting">
           <div class="spinner"></div>
           <div class="stk-title">Check Your Phone</div>
-
           <p class="stk-msg">An M-Pesa prompt has been sent to:</p>
           <div class="stk-phone-display" id="stk-phone-display">+254 7XX XXX XXX</div>
           <p class="stk-msg" id="stk-vote-summary"></p>
@@ -338,7 +412,7 @@
             Prompt expires in <span id="stk-countdown">120</span>s
           </div>
 
-          <!-- Shown after 30s if auto-confirm is slow -->
+          <!-- Shown after 30 s -->
           <div class="manual-confirm-section" id="manual-confirm-section" style="display:none">
             <div class="manual-confirm-title">✅ Already paid? Enter your code</div>
             <div class="manual-confirm-desc">
@@ -346,10 +420,8 @@
               confirmation code to verify your vote instantly.
             </div>
             <input
-              type="text"
-              id="mpesa-code"
-              placeholder="e.g. QJK7XXXXXX"
-              maxlength="12"
+              type="text" id="mpesa-code"
+              placeholder="e.g. QJK7XXXXXX" maxlength="12"
               oninput="this.value=this.value.toUpperCase()"
             />
             <button class="btn-manual-confirm" id="manual-confirm-btn">
@@ -359,7 +431,7 @@
 
           <button class="btn-outline" id="cancel-stk-btn">← Cancel</button>
         </div>
-      </div>
+      </div><!-- /#step-stk -->
 
       <!-- ══ STEP 3 — Success ══ -->
       <div id="step-success" style="display:none">
@@ -390,10 +462,13 @@
             Done — View Standings
           </button>
         </div>
-      </div>
+      </div><!-- /#step-success -->
 
-    </div><!-- /.modal -->
-  </div><!-- /.modal-overlay -->
+      <!-- Scroll-down gradient hint -->
+      <div class="scroll-hint" id="scroll-hint">▼ scroll</div>
+
+    </div><!-- /#modal-inner -->
+  </div><!-- /#pay-modal -->
 
   <!-- ══ TOAST ══ -->
   <div class="toast" id="toast">
@@ -401,8 +476,92 @@
     <span class="toast-msg"></span>
   </div>
 
-  <!-- data.js must load before vote.js -->
+  <!-- data.js first, then vote.js -->
   <script src="data.js"></script>
   <script src="vote.js"></script>
+
+  <script>
+  /* ═══════════════════════════════════════════════════
+     SCROLL & BODY-LOCK PATCH
+     Works alongside vote.js without modifying it.
+  ═══════════════════════════════════════════════════ */
+  (function () {
+    'use strict';
+
+    const overlay    = document.getElementById('pay-modal');
+    const inner      = document.getElementById('modal-inner');
+    const hint       = document.getElementById('scroll-hint');
+    let   scrollY    = 0;   // saved body scroll position for iOS lock
+
+    /* ── Body scroll lock (iOS-safe) ── */
+    function lockBody() {
+      scrollY = window.scrollY;
+      document.body.style.top      = `-${scrollY}px`;
+      document.body.classList.add('modal-open');
+    }
+    function unlockBody() {
+      document.body.classList.remove('modal-open');
+      document.body.style.top = '';
+      window.scrollTo(0, scrollY);
+    }
+
+    /* ── Scroll-hint visibility ── */
+    function updateHint() {
+      if (!inner || !hint) return;
+      const scrollable = inner.scrollHeight > inner.clientHeight + 4;
+      const atBottom   = inner.scrollTop + inner.clientHeight >= inner.scrollHeight - 12;
+      hint.style.opacity = (scrollable && !atBottom) ? '1' : '0';
+    }
+
+    if (inner) {
+      inner.addEventListener('scroll', updateHint, { passive: true });
+    }
+
+    /* ── Watch for vote.js toggling .open on the overlay ── */
+    if (overlay) {
+      new MutationObserver(function () {
+        if (overlay.classList.contains('open')) {
+          lockBody();
+          requestAnimationFrame(function () {
+            if (inner) inner.scrollTop = 0;
+            updateHint();
+          });
+        } else {
+          unlockBody();
+        }
+      }).observe(overlay, { attributes: true, attributeFilter: ['class'] });
+    }
+
+    /* ── Re-check hint whenever a step shows/hides ── */
+    ['step-form', 'step-stk', 'step-success'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) new MutationObserver(updateHint)
+        .observe(el, { attributes: true, attributeFilter: ['style'] });
+    });
+
+    /* ── Also re-check when manual-confirm section appears ── */
+    var mc = document.getElementById('manual-confirm-section');
+    if (mc) new MutationObserver(updateHint)
+      .observe(mc, { attributes: true, attributeFilter: ['style'] });
+
+    /* ── Prevent touchmove scroll bleed on iOS ── */
+    if (overlay) {
+      overlay.addEventListener('touchmove', function (e) {
+        if (inner && !inner.contains(e.target)) {
+          e.preventDefault();
+        }
+      }, { passive: false });
+    }
+
+    /* ── Close on backdrop tap ── */
+    if (overlay) {
+      overlay.addEventListener('click', function (e) {
+        if (e.target === overlay && typeof closePayModal === 'function') {
+          closePayModal();
+        }
+      });
+    }
+  })();
+  </script>
 </body>
 </html>
