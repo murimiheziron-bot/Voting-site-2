@@ -1,214 +1,409 @@
+
+
 <?php
 // ============================================================
-// mpesa_stk.php — M-Pesa STK Push Initiator
-// Presidential Annual Awards Voting System
+// mpesa_stk.php — Single-file M-Pesa Handler
+// Presidential Annual Awards
+// Handles: STK Push initiation + status poll + manual confirm
+// PUT THIS FILE in the SAME FOLDER as vote.html
 // ============================================================
 
-// ── Send JSON headers FIRST — before ANY output or errors ────
+// ── Always return JSON, never HTML ──────────────────────────
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
 
-// IMPORTANT: Turn OFF display_errors — PHP error HTML breaks JSON parsing in the browser
-error_reporting(E_ALL);
-ini_set('display_errors', 0);   // Must be 0 for a JSON API endpoint
-ini_set('log_errors', 1);       // Errors go to server log instead
+// Kill PHP error display — errors must NOT print HTML into our JSON
+ini_set('display_errors', 0);
+error_reporting(0);
 
-// Handle CORS preflight
+// Handle preflight
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit;
 }
 
 // ============================================================
-// CONFIG — Fill in your Safaricom Daraja credentials
-// Get them from: https://developer.safaricom.co.ke/
+// ★ EDIT THESE — your Daraja credentials
 // ============================================================
-$consumerKey    = "YOUR_CONSUMER_KEY";       // From Daraja portal
-$consumerSecret = "YOUR_CONSUMER_SECRET";    // From Daraja portal
-$shortcode      = "174379";                  // Sandbox: 174379 | Production: your paybill e.g. 4564811
-$passkey        = "YOUR_PASSKEY";            // Lipa Na M-Pesa Online Passkey from Daraja
-$callbackUrl    = "https://yourdomain.com/mpesa_callback.php"; // Public HTTPS URL — not localhost
-$environment    = "sandbox";                 // "sandbox" or "production"
+$CONSUMER_KEY    = 'YOUR_CONSUMER_KEY';       // from developer.safaricom.co.ke
+$CONSUMER_SECRET = 'YOUR_CONSUMER_SECRET';    // from developer.safaricom.co.ke
+$SHORTCODE       = '174379';                  // sandbox test shortcode OR your real paybill e.g. 4564811
+$PASSKEY         = 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919'; // sandbox passkey OR your real one
+$CALLBACK_URL    = 'https://yourdomain.com/mpesa_stk.php'; // ← MUST be a public HTTPS URL (not localhost)
 
-$baseUrl = ($environment === "production")
-    ? "https://api.safaricom.co.ke"
-    : "https://sandbox.safaricom.co.ke";
+// sandbox or production
+$ENV             = 'sandbox'; // change to 'production' when going live
+$BASE_URL        = $ENV === 'production'
+    ? 'https://api.safaricom.co.ke'
+    : 'https://sandbox.safaricom.co.ke';
 
 // ============================================================
-// READ INPUT
+// ★ OPTIONAL: SQLite vote log (auto-created, no DB setup needed)
+//   Set to false if you don't want any local storage
 // ============================================================
-$raw  = file_get_contents("php://input");
-$data = json_decode($raw, true);
+$USE_STORAGE = true;
+$DB_FILE     = __DIR__ . '/votes.db';
 
-if (!$data) {
-    echo json_encode(["success" => false, "message" => "Invalid request — no JSON body received"]);
+// ── Read incoming JSON ────────────────────────────────────
+$raw     = file_get_contents('php://input');
+$payload = json_decode($raw, true);
+
+if (!$payload) {
+    echo json_encode(['success' => false, 'message' => 'Invalid request body']);
     exit;
 }
 
-// ── Route: manual confirmation fallback ──────────────────────
-$action = $data['action'] ?? 'stk_push';
+$action = $payload['action'] ?? 'stk_push';
 
-if ($action === 'manual_confirm') {
-    $mpesaCode = strtoupper(trim($data['mpesaCode'] ?? ''));
-    if (strlen($mpesaCode) < 8) {
-        echo json_encode(["success" => false, "message" => "Invalid M-Pesa transaction code"]);
-        exit;
+// ============================================================
+// ROUTER
+// ============================================================
+try {
+    switch ($action) {
+        case 'stk_push':
+            handleStkPush($payload, $BASE_URL, $CONSUMER_KEY, $CONSUMER_SECRET, $SHORTCODE, $PASSKEY, $CALLBACK_URL, $USE_STORAGE, $DB_FILE);
+            break;
+
+        case 'poll':
+            handlePoll($payload, $BASE_URL, $CONSUMER_KEY, $CONSUMER_SECRET, $SHORTCODE, $PASSKEY, $USE_STORAGE, $DB_FILE);
+            break;
+
+        case 'manual_confirm':
+            handleManualConfirm($payload, $USE_STORAGE, $DB_FILE);
+            break;
+
+        case 'callback':
+            handleCallback($payload, $USE_STORAGE, $DB_FILE);
+            break;
+
+        default:
+            echo json_encode(['success' => false, 'message' => 'Unknown action: ' . $action]);
     }
-    // You can add DB update logic here if needed
-    echo json_encode(["success" => true, "mpesaCode" => $mpesaCode]);
-    exit;
+} catch (Throwable $e) {
+    echo json_encode(['success' => false, 'message' => 'Server error: ' . $e->getMessage()]);
 }
 
-// ── Extract STK Push fields ───────────────────────────────────
-$phone         = trim($data['phone']         ?? '');
-$amount        = (int)($data['amount']       ?? 0);
-$candidateId   = $data['candidateId']        ?? '';
-$candidateName = $data['candidateName']      ?? 'Candidate';
-$voterName     = $data['voterName']          ?? '';
-$votes         = (int)($data['votes']        ?? 1);
-
-// ── Validate inputs ───────────────────────────────────────────
-if (empty($phone)) {
-    echo json_encode(["success" => false, "message" => "Phone number is required"]);
-    exit;
-}
-if ($amount < 20) {
-    echo json_encode(["success" => false, "message" => "Minimum amount is KES 20"]);
-    exit;
-}
-if ($amount % 20 !== 0) {
-    echo json_encode(["success" => false, "message" => "Amount must be a multiple of KES 20"]);
-    exit;
-}
-
-// ── Normalise phone to 2547XXXXXXXX ──────────────────────────
-$phone = preg_replace('/\D/', '', $phone);          // strip non-digits
-if (substr($phone, 0, 1) === '0') {
-    $phone = '254' . substr($phone, 1);             // 07XX → 2547XX
-}
-if (substr($phone, 0, 1) === '+') {
-    $phone = ltrim($phone, '+');                    // +254 → 254
-}
-
-if (!preg_match('/^254(7|1)\d{8}$/', $phone)) {
-    echo json_encode([
-        "success" => false,
-        "message" => "Invalid phone number. Use Safaricom format: 07XX XXX XXX or 01XX XXX XXX"
+// ============================================================
+// FUNCTION: Get OAuth token
+// ============================================================
+function getToken($baseUrl, $key, $secret) {
+    $credentials = base64_encode("$key:$secret");
+    $ch = curl_init("$baseUrl/oauth/v1/generate?grant_type=client_credentials");
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER     => ["Authorization: Basic $credentials"],
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_SSL_VERIFYPEER => true,
     ]);
-    exit;
+    $res = curl_exec($ch);
+    $err = curl_error($ch);
+    curl_close($ch);
+    if ($err || !$res) return null;
+    $data = json_decode($res, true);
+    return $data['access_token'] ?? null;
 }
 
 // ============================================================
-// STEP 1 — Get OAuth Access Token from Safaricom
+// FUNCTION: STK Push initiation
 // ============================================================
-$credentials = base64_encode("$consumerKey:$consumerSecret");
+function handleStkPush($p, $baseUrl, $key, $secret, $shortcode, $passkey, $callbackUrl, $useDb, $dbFile) {
+    // Validate
+    $phone  = sanitizePhone($p['phone'] ?? '');
+    $amount = (int)($p['amount'] ?? 0);
 
-$ch = curl_init("$baseUrl/oauth/v1/generate?grant_type=client_credentials");
-curl_setopt_array($ch, [
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_HTTPHEADER     => ["Authorization: Basic $credentials"],
-    CURLOPT_SSL_VERIFYPEER => ($environment === 'production'),
-    CURLOPT_TIMEOUT        => 15,
-]);
-$tokenRaw   = curl_exec($ch);
-$tokenCurlErr = curl_error($ch);
-curl_close($ch);
+    if (!$phone) {
+        echo json_encode(['success' => false, 'message' => 'Invalid phone number. Use 07XX or 01XX format.']);
+        return;
+    }
+    if ($amount < 20 || $amount % 20 !== 0) {
+        echo json_encode(['success' => false, 'message' => 'Amount must be a multiple of KES 20.']);
+        return;
+    }
 
-if ($tokenCurlErr || !$tokenRaw) {
-    echo json_encode([
-        "success" => false,
-        "message" => "Cannot reach Safaricom servers. Check your internet connection."
-    ]);
-    exit;
-}
+    $candidateId   = $p['candidateId']   ?? '';
+    $candidateName = $p['candidateName'] ?? 'Candidate';
+    $voterName     = $p['voterName']     ?? '';
+    $votes         = (int)($p['votes']   ?? ($amount / 20));
 
-$tokenData   = json_decode($tokenRaw, true);
-$accessToken = $tokenData['access_token'] ?? null;
+    // Get token
+    $token = getToken($baseUrl, $key, $secret);
+    if (!$token) {
+        echo json_encode(['success' => false, 'message' => 'Could not authenticate with M-Pesa. Check your Consumer Key & Secret.']);
+        return;
+    }
 
-if (!$accessToken) {
-    $detail = $tokenData['error_description'] ?? $tokenData['errorMessage'] ?? 'Check Consumer Key & Secret';
-    echo json_encode(["success" => false, "message" => "M-Pesa authentication failed: $detail"]);
-    exit;
-}
+    // Build STK Push body
+    $timestamp = date('YmdHis');
+    $password  = base64_encode($shortcode . $passkey . $timestamp);
 
-// ============================================================
-// STEP 2 — Build & Send STK Push Request
-// ============================================================
-$timestamp = date("YmdHis");
-$password  = base64_encode($shortcode . $passkey . $timestamp);
+    $body = [
+        'BusinessShortCode' => $shortcode,
+        'Password'          => $password,
+        'Timestamp'         => $timestamp,
+        'TransactionType'   => 'CustomerPayBillOnline',
+        'Amount'            => $amount,
+        'PartyA'            => $phone,
+        'PartyB'            => $shortcode,
+        'PhoneNumber'       => $phone,
+        'CallBackURL'       => $callbackUrl . '?action=callback',
+        'AccountReference'  => substr($candidateName, 0, 12),
+        'TransactionDesc'   => 'Vote',
+    ];
 
-// Safaricom limits: AccountReference ≤ 12 chars, TransactionDesc ≤ 13 chars
-$accountRef  = substr('Vote-' . preg_replace('/[^a-zA-Z0-9]/', '', $candidateName), 0, 12);
-$description = substr("Vote $candidateName", 0, 13);
-
-$stkBody = [
-    "BusinessShortCode" => $shortcode,
-    "Password"          => $password,
-    "Timestamp"         => $timestamp,
-    "TransactionType"   => "CustomerPayBillOnline",
-    "Amount"            => $amount,
-    "PartyA"            => $phone,
-    "PartyB"            => $shortcode,
-    "PhoneNumber"       => $phone,
-    "CallBackURL"       => $callbackUrl,
-    "AccountReference"  => $accountRef ?: 'Vote',
-    "TransactionDesc"   => $description ?: 'Vote',
-];
-
-$ch = curl_init("$baseUrl/mpesa/stkpush/v1/processrequest");
-curl_setopt_array($ch, [
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_POST           => true,
-    CURLOPT_POSTFIELDS     => json_encode($stkBody),
-    CURLOPT_HTTPHEADER     => [
-        "Content-Type: application/json",
-        "Authorization: Bearer $accessToken",
-    ],
-    CURLOPT_SSL_VERIFYPEER => ($environment === 'production'),
-    CURLOPT_TIMEOUT        => 30,
-]);
-
-$stkRaw    = curl_exec($ch);
-$stkCurlErr= curl_error($ch);
-$httpCode  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-curl_close($ch);
-
-if ($stkCurlErr) {
-    echo json_encode(["success" => false, "message" => "STK Push curl error: $stkCurlErr"]);
-    exit;
-}
-
-$res = json_decode($stkRaw, true);
-
-// ============================================================
-// STEP 3 — Return result to vote.js
-// ResponseCode "0" = STK sent successfully
-// ============================================================
-if (isset($res['CheckoutRequestID']) && ($res['ResponseCode'] ?? '') === '0') {
-
-    echo json_encode([
-        "success"           => true,
-        "checkoutRequestId" => $res['CheckoutRequestID'],
-        "message"           => "M-Pesa prompt sent. Check your phone and enter your PIN.",
-    ]);
-
-} else {
-
-    // Surface a readable error to the frontend
-    $errMsg = $res['errorMessage']
-        ?? $res['ResponseDescription']
-        ?? $res['ResultDesc']
-        ?? "STK Push failed (HTTP $httpCode). Check your credentials and callback URL.";
-
-    echo json_encode([
-        "success" => false,
-        "message" => $errMsg,
-        // Remove 'debug' key in production:
-        "debug"   => [
-            "httpCode"    => $httpCode,
-            "safaricomResponse" => $res,
+    $ch = curl_init("$baseUrl/mpesa/stkpush/v1/processrequest");
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($body),
+        CURLOPT_HTTPHEADER     => [
+            "Authorization: Bearer $token",
+            "Content-Type: application/json",
         ],
+        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_SSL_VERIFYPEER => true,
     ]);
+
+    $res  = curl_exec($ch);
+    $err  = curl_error($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($err) {
+        echo json_encode(['success' => false, 'message' => 'cURL error: ' . $err]);
+        return;
+    }
+
+    $data = json_decode($res, true);
+
+    if (($data['ResponseCode'] ?? '') === '0') {
+        $checkoutId = $data['CheckoutRequestID'];
+
+        // Save to SQLite
+        if ($useDb) {
+            $db = openDb($dbFile);
+            if ($db) {
+                $stmt = $db->prepare(
+                    "INSERT OR IGNORE INTO transactions
+                     (checkout_id, candidate_id, candidate_name, voter_name, phone, amount, votes, status)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING')"
+                );
+                $stmt->execute([$checkoutId, $candidateId, $candidateName, $voterName, $phone, $amount, $votes]);
+            }
+        }
+
+        echo json_encode([
+            'success'           => true,
+            'checkoutRequestId' => $checkoutId,
+            'message'           => 'STK push sent',
+        ]);
+    } else {
+        $msg = $data['errorMessage'] ?? $data['ResponseDescription'] ?? 'STK Push failed. Check your shortcode and passkey.';
+        echo json_encode(['success' => false, 'message' => $msg]);
+    }
+}
+
+// ============================================================
+// FUNCTION: Poll payment status
+// ============================================================
+function handlePoll($p, $baseUrl, $key, $secret, $shortcode, $passkey, $useDb, $dbFile) {
+    $checkoutId = trim($p['checkoutRequestId'] ?? '');
+    if (!$checkoutId) {
+        echo json_encode(['status' => 'ERROR', 'message' => 'Missing checkoutRequestId']);
+        return;
+    }
+
+    // Check SQLite first (fastest)
+    if ($useDb) {
+        $db = openDb($dbFile);
+        if ($db) {
+            $row = $db->query("SELECT status, mpesa_code, votes FROM transactions WHERE checkout_id = " . $db->quote($checkoutId))->fetch(PDO::FETCH_ASSOC);
+            if ($row) {
+                if ($row['status'] === 'COMPLETED') {
+                    echo json_encode(['status' => 'COMPLETED', 'mpesaCode' => $row['mpesa_code']]);
+                    return;
+                }
+                if (in_array($row['status'], ['FAILED', 'CANCELLED'])) {
+                    echo json_encode(['status' => $row['status']]);
+                    return;
+                }
+            }
+        }
+    }
+
+    // Query Safaricom API
+    $token = getToken($baseUrl, $key, $secret);
+    if (!$token) {
+        echo json_encode(['status' => 'PENDING']); // keep polling
+        return;
+    }
+
+    $timestamp = date('YmdHis');
+    $password  = base64_encode($shortcode . $passkey . $timestamp);
+
+    $body = [
+        'BusinessShortCode' => $shortcode,
+        'Password'          => $password,
+        'Timestamp'         => $timestamp,
+        'CheckoutRequestID' => $checkoutId,
+    ];
+
+    $ch = curl_init("$baseUrl/mpesa/stkpushquery/v1/query");
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($body),
+        CURLOPT_HTTPHEADER     => [
+            "Authorization: Bearer $token",
+            "Content-Type: application/json",
+        ],
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+
+    $res  = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($code === 200) {
+        $data = json_decode($res, true);
+        $rc   = (string)($data['ResultCode'] ?? '');
+
+        if ($rc === '0') {
+            // SUCCESS — update DB
+            if ($useDb) {
+                $db = openDb($dbFile);
+                if ($db) {
+                    $db->exec("UPDATE transactions SET status='COMPLETED' WHERE checkout_id = " . $db->quote($checkoutId));
+                    addVotes($db, $checkoutId);
+                }
+            }
+            echo json_encode(['status' => 'COMPLETED', 'mpesaCode' => 'API_CONFIRMED']);
+            return;
+        }
+
+        if ($rc !== '') {
+            // Any non-0 result = failed
+            $newStatus = ($rc === '1032') ? 'CANCELLED' : 'FAILED';
+            if ($useDb) {
+                $db = openDb($dbFile);
+                if ($db) $db->exec("UPDATE transactions SET status='$newStatus' WHERE checkout_id = " . $db->quote($checkoutId));
+            }
+            echo json_encode(['status' => $newStatus]);
+            return;
+        }
+    }
+
+    echo json_encode(['status' => 'PENDING']);
+}
+
+// ============================================================
+// FUNCTION: Manual code confirmation
+// ============================================================
+function handleManualConfirm($p, $useDb, $dbFile) {
+    $code       = strtoupper(trim($p['mpesaCode'] ?? ''));
+    $checkoutId = $p['checkoutRequestId'] ?? '';
+
+    if (strlen($code) < 8) {
+        echo json_encode(['success' => false, 'message' => 'Code too short. Enter the full M-Pesa confirmation code.']);
+        return;
+    }
+
+    if ($useDb) {
+        $db = openDb($dbFile);
+        if ($db) {
+            $db->exec("UPDATE transactions SET status='COMPLETED', mpesa_code=" . $db->quote($code) . " WHERE checkout_id = " . $db->quote($checkoutId));
+            addVotes($db, $checkoutId);
+        }
+    }
+
+    echo json_encode(['success' => true, 'mpesaCode' => $code]);
+}
+
+// ============================================================
+// FUNCTION: Safaricom callback (called by Safaricom servers)
+// ============================================================
+function handleCallback($payload, $useDb, $dbFile) {
+    // Log raw callback
+    file_put_contents(__DIR__ . '/mpesa_log.txt', date('[Y-m-d H:i:s] ') . json_encode($payload) . "\n", FILE_APPEND | LOCK_EX);
+
+    $cb          = $payload['Body']['stkCallback']    ?? [];
+    $checkoutId  = $cb['CheckoutRequestID']           ?? '';
+    $resultCode  = (int)($cb['ResultCode']            ?? 1);
+
+    if (!$checkoutId) {
+        echo json_encode(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
+        return;
+    }
+
+    if ($useDb) {
+        $db = openDb($dbFile);
+        if ($db) {
+            if ($resultCode === 0) {
+                $items     = $cb['CallbackMetadata']['Item'] ?? [];
+                $mpesaCode = '';
+                foreach ($items as $item) {
+                    if ($item['Name'] === 'MpesaReceiptNumber') $mpesaCode = $item['Value'] ?? '';
+                }
+                $db->exec("UPDATE transactions SET status='COMPLETED', mpesa_code=" . $db->quote($mpesaCode) . " WHERE checkout_id = " . $db->quote($checkoutId));
+                addVotes($db, $checkoutId);
+            } else {
+                $status = ($resultCode === 1032) ? 'CANCELLED' : 'FAILED';
+                $db->exec("UPDATE transactions SET status='$status' WHERE checkout_id = " . $db->quote($checkoutId));
+            }
+        }
+    }
+
+    echo json_encode(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
+}
+
+// ============================================================
+// HELPERS
+// ============================================================
+function sanitizePhone($raw) {
+    $p = preg_replace('/[\s\-]/', '', $raw);
+    if (substr($p, 0, 1) === '0') $p = '254' . substr($p, 1);
+    if (substr($p, 0, 1) === '+') $p = substr($p, 1);
+    if (preg_match('/^254(7|1)\d{8}$/', $p)) return $p;
+    return null;
+}
+
+function openDb($file) {
+    try {
+        $db = new PDO("sqlite:$file");
+        $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $db->exec("
+            CREATE TABLE IF NOT EXISTS transactions (
+                checkout_id    TEXT PRIMARY KEY,
+                candidate_id   TEXT,
+                candidate_name TEXT,
+                voter_name     TEXT,
+                phone          TEXT,
+                amount         INTEGER DEFAULT 0,
+                votes          INTEGER DEFAULT 0,
+                mpesa_code     TEXT DEFAULT '',
+                status         TEXT DEFAULT 'PENDING',
+                created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS candidate_votes (
+                candidate_id   TEXT PRIMARY KEY,
+                candidate_name TEXT,
+                total_votes    INTEGER DEFAULT 0
+            );
+        ");
+        return $db;
+    } catch (Exception $e) {
+        return null;
+    }
+}
+
+function addVotes($db, $checkoutId) {
+    $row = $db->query("SELECT candidate_id, candidate_name, votes FROM transactions WHERE checkout_id = " . $db->quote($checkoutId))->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return;
+    $db->exec("
+        INSERT INTO candidate_votes (candidate_id, candidate_name, total_votes)
+        VALUES (" . $db->quote($row['candidate_id']) . ", " . $db->quote($row['candidate_name']) . ", " . (int)$row['votes'] . ")
+        ON CONFLICT(candidate_id) DO UPDATE SET total_votes = total_votes + " . (int)$row['votes']
+    );
 }
