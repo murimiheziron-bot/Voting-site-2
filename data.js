@@ -15,9 +15,9 @@ const PAA = {
   ADMIN_PASS:  'paa2025',
   STORAGE_KEY: 'paa_data_v2',
 
-  /* ── M-Pesa API endpoints (your PHP backend) ── */
+  /* ── M-Pesa API endpoints — all handled by ONE file ── */
   STK_ENDPOINT:  'mpesa_stk.php',
-  POLL_ENDPOINT: 'mpesa_poll.php',
+  POLL_ENDPOINT: 'mpesa_stk.php',  // same file, action='poll'
   POLL_INTERVAL: 3000,   // ms between status checks
   STK_TIMEOUT:   120,    // seconds before showing manual fallback
 
@@ -116,6 +116,7 @@ const MpesaService = {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
+        action:       'stk_push',
         phone,
         amount,
         candidateId,
@@ -156,7 +157,7 @@ const MpesaService = {
       const res = await fetch(PAA.POLL_ENDPOINT, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ checkoutRequestId: this._checkoutId }),
+        body:    JSON.stringify({ action: 'poll', checkoutRequestId: this._checkoutId }),
       });
 
       const contentType = res.headers.get('content-type') || '';
