@@ -6,6 +6,135 @@
   <title>Vote – Presidential Annual Awards 2025</title>
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="vote.css" />
+  <style>
+    /* ══ Extra M-Pesa flow styles (no changes to styles.css / vote.css) ══ */
+
+    /* Progress steps */
+    .progress-steps {
+      display: flex; align-items: center; justify-content: center; gap: 0;
+      margin-bottom: 24px;
+    }
+    .ps-dot {
+      width: 28px; height: 28px; border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.12);
+      background: transparent;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700; color: rgba(255,255,255,0.3);
+      transition: all 0.3s; position: relative; z-index: 1;
+    }
+    .ps-dot.active { border-color: var(--gold); color: var(--gold); }
+    .ps-dot.done   { border-color: #22c55e; background: #22c55e; color: #fff; }
+    .ps-line {
+      flex: 1; height: 2px; max-width: 60px;
+      background: rgba(255,255,255,0.08); transition: background 0.3s;
+    }
+    .ps-line.done { background: var(--gold); }
+
+    /* STK phone badge */
+    .stk-phone-display {
+      display: inline-block;
+      background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25);
+      border-radius: 8px; padding: 5px 16px;
+      font-size: 14px; font-weight: 700; color: #22c55e;
+      margin: 10px 0 6px;
+    }
+
+    /* STK instruction steps */
+    .stk-steps {
+      text-align: left; background: rgba(255,255,255,0.03);
+      border-radius: 10px; padding: 13px 15px;
+      margin: 14px 0 10px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .stk-step {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 12.5px; color: rgba(255,255,255,0.4);
+    }
+    .stk-step-num {
+      width: 20px; height: 20px; border-radius: 50%;
+      background: rgba(255,255,255,0.07); color: var(--gold);
+      font-size: 10px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    .stk-step.done-step { color: rgba(255,255,255,0.7); }
+    .stk-step.done-step .stk-step-num { background: #22c55e; color: #fff; }
+
+    /* Countdown */
+    .stk-timer { font-size: 11.5px; color: rgba(255,255,255,0.3); margin-bottom: 4px; }
+    .stk-timer span { color: var(--gold); font-weight: 600; }
+
+    /* Manual confirm fallback */
+    .manual-confirm-section {
+      margin-top: 14px; padding: 14px 15px;
+      background: rgba(201,168,76,0.05);
+      border: 1px solid rgba(201,168,76,0.2); border-radius: 10px;
+    }
+    .manual-confirm-title {
+      font-size: 11px; font-weight: 700; color: var(--gold);
+      text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 5px;
+    }
+    .manual-confirm-desc {
+      font-size: 11.5px; color: rgba(255,255,255,0.4); line-height: 1.5; margin-bottom: 10px;
+    }
+    .manual-confirm-section input {
+      width: 100%; padding: 9px 12px;
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px; color: #fff; font-size: 13px; font-family: monospace;
+      letter-spacing: 0.08em; outline: none; margin-bottom: 8px;
+      transition: border-color 0.2s;
+    }
+    .manual-confirm-section input:focus { border-color: var(--gold); }
+    .manual-confirm-section input::placeholder {
+      color: rgba(255,255,255,0.2); font-family: inherit; letter-spacing: 0;
+    }
+
+    /* Cancel + manual confirm buttons */
+    .btn-outline {
+      width: 100%; padding: 10px; background: transparent;
+      border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
+      color: rgba(255,255,255,0.35); font-size: 12.5px; cursor: pointer;
+      transition: all 0.2s; margin-top: 10px; font-family: inherit;
+    }
+    .btn-outline:hover { border-color: rgba(255,255,255,0.3); color: rgba(255,255,255,0.6); }
+
+    .btn-manual-confirm {
+      width: 100%; padding: 10px;
+      background: linear-gradient(135deg, #8a6f2e, var(--gold));
+      border: none; border-radius: 8px; color: #000;
+      font-size: 13px; font-weight: 700; cursor: pointer;
+      transition: opacity 0.2s; font-family: inherit;
+    }
+    .btn-manual-confirm:hover    { opacity: 0.88; }
+    .btn-manual-confirm:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* Success detail box */
+    .success-details {
+      background: rgba(34,197,94,0.06); border: 1px solid rgba(34,197,94,0.18);
+      border-radius: 10px; padding: 13px 15px; margin: 16px 0; text-align: left;
+    }
+    .success-detail-row {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 12.5px; padding: 5px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .success-detail-row:last-child { border-bottom: none; }
+    .success-detail-row span:first-child { color: rgba(255,255,255,0.4); }
+    .success-detail-row span:last-child  { color: #fff; font-weight: 600; }
+
+    /* Button spinner */
+    .btn-spinner {
+      display: inline-block; width: 15px; height: 15px;
+      border: 2px solid rgba(0,0,0,0.2); border-top-color: #000;
+      border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Toast error */
+    .toast.error { border-color: rgba(239,68,68,0.45); }
+
+    /* Phone field */
+    #voter-phone { letter-spacing: 0.04em; }
+  </style>
 </head>
 <body>
 
@@ -49,7 +178,7 @@
   <section class="candidates-section">
     <p class="section-eyebrow">— Select Your Candidate —</p>
     <div class="candidates-grid" id="candidates-grid">
-      <!-- Injected by vote.js -->
+      <!-- Injected by vote.js — images from images/mariga.jpg etc. are preserved -->
     </div>
   </section>
 
@@ -71,16 +200,29 @@
     &nbsp;·&nbsp; Acc: <strong style="color:var(--gold)">Your Name</strong>
   </footer>
 
-  <!-- ══ PAYMENT MODAL ══ -->
+  <!-- ══════════════════════════════════════════════════
+       PAYMENT MODAL — 3-Step M-Pesa STK Push Flow
+  ═══════════════════════════════════════════════════ -->
   <div class="modal-overlay" id="pay-modal">
     <div class="modal">
       <button class="modal-close" id="modal-close-btn" aria-label="Close">✕</button>
 
-      <!-- Step 1 · Payment Form -->
+      <!-- Progress indicator -->
+      <div class="progress-steps">
+        <div class="ps-dot active" id="ps1">1</div>
+        <div class="ps-line"       id="ps-line1"></div>
+        <div class="ps-dot"        id="ps2">2</div>
+        <div class="ps-line"       id="ps-line2"></div>
+        <div class="ps-dot"        id="ps3">3</div>
+      </div>
+
+      <!-- ══ STEP 1 — Payment Form ══ -->
       <div id="step-form">
         <div class="modal-eyebrow">Presidential Annual Awards</div>
         <div class="modal-candidate" id="modal-candidate-name">Candidate</div>
-        <p class="modal-sub">Enter your M-Pesa amount — votes are added automatically.</p>
+        <p class="modal-sub">
+          Enter your Safaricom number — an M-Pesa prompt will be sent to your phone.
+        </p>
 
         <div class="mpesa-box">
           <div class="mpesa-header">
@@ -97,7 +239,7 @@
             </div>
             <div class="mpesa-row">
               <span>Account Number</span>
-              <strong>Your Name</strong>
+              <strong id="mpesa-acc-display">Your Name</strong>
             </div>
             <div class="mpesa-row">
               <span>Rate</span>
@@ -106,9 +248,21 @@
           </div>
         </div>
 
-        <!-- Amount input with live vote counter -->
+        <!-- Phone — REQUIRED for real STK Push -->
         <div class="form-field">
-          <label>Amount to Pay (KES)</label>
+          <label>M-Pesa Phone Number *</label>
+          <input
+            type="tel"
+            id="voter-phone"
+            placeholder="e.g. 0712 345 678"
+            autocomplete="tel"
+            maxlength="13"
+          />
+        </div>
+
+        <!-- Amount -->
+        <div class="form-field">
+          <label>Amount to Pay (KES) *</label>
           <input
             type="number"
             id="vote-amount"
@@ -118,14 +272,14 @@
           />
         </div>
 
-        <!-- Live vote preview pill -->
+        <!-- Live vote preview -->
         <div class="vote-preview" id="vote-preview">
           <span class="preview-label">You will cast</span>
           <span class="preview-count" id="preview-count">—</span>
           <span class="preview-label">vote(s)</span>
         </div>
 
-        <!-- Quick amount buttons -->
+        <!-- Quick amounts -->
         <div class="quick-amounts">
           <button class="quick-btn" onclick="setAmount(20)">KES 20<br/><small>1 vote</small></button>
           <button class="quick-btn" onclick="setAmount(60)">KES 60<br/><small>3 votes</small></button>
@@ -133,8 +287,9 @@
           <button class="quick-btn" onclick="setAmount(200)">KES 200<br/><small>10 votes</small></button>
         </div>
 
-        <div class="form-field" style="margin-top:18px;">
-          <label>Your Full Name</label>
+        <!-- Voter name -->
+        <div class="form-field" style="margin-top:16px;">
+          <label>Your Full Name *</label>
           <input
             type="text"
             id="voter-name"
@@ -143,41 +298,102 @@
           />
         </div>
 
-        <button class="btn-gold" style="width:100%" id="pay-btn">
-          <span>🔒</span> <span id="pay-btn-label">Confirm Vote — KES 20</span>
+        <!-- This button now fires REAL STK Push -->
+        <button class="btn-gold" style="width:100%;margin-top:4px" id="pay-btn">
+          <span>📲</span> <span id="pay-btn-label">Send M-Pesa Prompt — KES 20</span>
         </button>
 
         <p class="modal-note">
-          You'll receive an M-Pesa STK push on your phone.<br />
-          Enter your PIN to confirm. KES 20 = 1 vote.
+          An M-Pesa STK push will appear on your phone.<br/>
+          Enter your PIN to confirm. Votes are added automatically.
         </p>
       </div>
 
-      <!-- Step 2 · STK Push Waiting -->
+      <!-- ══ STEP 2 — Awaiting Payment ══ -->
       <div id="step-stk" style="display:none">
         <div class="stk-waiting">
           <div class="spinner"></div>
-          <div class="stk-title">Awaiting Payment…</div>
+          <div class="stk-title">Check Your Phone</div>
+
+          <p class="stk-msg">An M-Pesa prompt has been sent to:</p>
+          <div class="stk-phone-display" id="stk-phone-display">+254 7XX XXX XXX</div>
           <p class="stk-msg" id="stk-vote-summary"></p>
-          <p class="stk-msg" style="margin-top:8px;">
-            Check your phone and enter your M-Pesa PIN to confirm.
-          </p>
+
+          <div class="stk-steps">
+            <div class="stk-step done-step">
+              <div class="stk-step-num">✓</div>
+              <span>M-Pesa prompt sent to your phone</span>
+            </div>
+            <div class="stk-step">
+              <div class="stk-step-num">2</div>
+              <span>Open the popup &amp; enter your M-Pesa PIN</span>
+            </div>
+            <div class="stk-step">
+              <div class="stk-step-num">3</div>
+              <span>Your vote is recorded automatically</span>
+            </div>
+          </div>
+
+          <div class="stk-timer">
+            Prompt expires in <span id="stk-countdown">120</span>s
+          </div>
+
+          <!-- Shown after 30s if auto-confirm is slow -->
+          <div class="manual-confirm-section" id="manual-confirm-section" style="display:none">
+            <div class="manual-confirm-title">✅ Already paid? Enter your code</div>
+            <div class="manual-confirm-desc">
+              If automatic confirmation is delayed, paste your M-Pesa
+              confirmation code to verify your vote instantly.
+            </div>
+            <input
+              type="text"
+              id="mpesa-code"
+              placeholder="e.g. QJK7XXXXXX"
+              maxlength="12"
+              oninput="this.value=this.value.toUpperCase()"
+            />
+            <button class="btn-manual-confirm" id="manual-confirm-btn">
+              Confirm with M-Pesa Code
+            </button>
+          </div>
+
+          <button class="btn-outline" id="cancel-stk-btn">← Cancel</button>
         </div>
       </div>
 
-      <!-- Step 3 · Success -->
+      <!-- ══ STEP 3 — Success ══ -->
       <div id="step-success" style="display:none">
         <div class="success-wrap">
           <div class="success-icon">✓</div>
           <div class="success-title">Vote Confirmed!</div>
-          <p class="success-msg" id="success-msg">Your vote has been recorded.</p>
-          <button class="btn-gold" style="width:100%;margin-top:24px" id="success-close-btn">
-            Done
+          <p class="success-msg">Your vote has been recorded successfully.</p>
+
+          <div class="success-details">
+            <div class="success-detail-row">
+              <span>Candidate</span><span id="s-candidate">—</span>
+            </div>
+            <div class="success-detail-row">
+              <span>Votes Added</span><span id="s-votes">—</span>
+            </div>
+            <div class="success-detail-row">
+              <span>Amount Paid</span><span id="s-amount">—</span>
+            </div>
+            <div class="success-detail-row">
+              <span>M-Pesa Code</span><span id="s-code">—</span>
+            </div>
+            <div class="success-detail-row">
+              <span>Voter</span><span id="s-voter">—</span>
+            </div>
+          </div>
+
+          <button class="btn-gold" style="width:100%;margin-top:8px" id="success-close-btn">
+            Done — View Standings
           </button>
         </div>
       </div>
-    </div>
-  </div>
+
+    </div><!-- /.modal -->
+  </div><!-- /.modal-overlay -->
 
   <!-- ══ TOAST ══ -->
   <div class="toast" id="toast">
@@ -185,7 +401,7 @@
     <span class="toast-msg"></span>
   </div>
 
-  <!-- Scripts -->
+  <!-- data.js must load before vote.js -->
   <script src="data.js"></script>
   <script src="vote.js"></script>
 </body>
