@@ -112,7 +112,7 @@ function openPayModal(candidateId) {
   if (!selectedCandidate) return;
 
   // Stop any running timers from a previous attempt
-  if (typeof MpesaService !== 'undefined') MpesaService.stopAll();
+  stopAll();
   pendingVoteState = {};
 
   // Reset UI to Step 1
@@ -137,7 +137,7 @@ function openPayModal(candidateId) {
 }
 
 function closePayModal() {
-  if (typeof MpesaService !== 'undefined') MpesaService.stopAll();
+  stopAll();
   document.getElementById('pay-modal').classList.remove('open');
   selectedCandidate = null;
   pendingVoteState  = {};
@@ -237,6 +237,7 @@ async function submitVote() {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        action:        'stk_push',          // ← always send action
         phone,
         amount,
         candidateId:   selectedCandidate.id,
@@ -246,7 +247,7 @@ async function submitVote() {
       }),
     });
 
-    // Guard: if server returned HTML (404/500) instead of JSON, catch it cleanly
+    // Guard: if server returned HTML (404/500) instead of JSON, catch cleanly
     const ct = resp.headers.get('content-type') || '';
     if (!ct.includes('application/json')) {
       const text = await resp.text();
@@ -291,6 +292,7 @@ async function submitVote() {
     `KES ${amount} · ${votes} vote${votes !== 1 ? 's' : ''} for ${selectedCandidate.name}`;
 
   // ── Poll for payment confirmation every 3s ───────────────
+  // FIX: was incorrectly calling 'mpesa_poll.php' — now uses mpesa_stk.php with action:'poll'
   startPolling(stkResult.checkoutRequestId);
 
   // ── Countdown timer ──────────────────────────────────────
@@ -299,6 +301,8 @@ async function submitVote() {
 
 /* ══════════════════════════════════════
    POLLING — checks payment status
+   FIX: was fetching 'mpesa_poll.php' (wrong file, caused 404)
+        now fetches 'mpesa_stk.php' with action:'poll'
 ══════════════════════════════════════ */
 let _pollTimer     = null;
 let _cdownTimer    = null;
@@ -308,14 +312,17 @@ function startPolling(checkoutRequestId) {
   stopPolling();
   _pollTimer = setInterval(async () => {
     try {
-      const resp = await fetch('mpesa_poll.php', {
+      const resp = await fetch('mpesa_stk.php', {          // ← FIXED: was 'mpesa_poll.php'
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ checkoutRequestId }),
+        body: JSON.stringify({
+          action: 'poll',                                   // ← FIXED: action was missing
+          checkoutRequestId,
+        }),
       });
 
       const ct = resp.headers.get('content-type') || '';
-      if (!ct.includes('application/json')) return; // silent — keep polling
+      if (!ct.includes('application/json')) return;        // silent — keep polling
 
       const data = await resp.json();
 
