@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════
    PRESIDENTIAL ANNUAL AWARDS — vote.js
-   Wired to mpesa_stk.php for real Safaricom STK Push
+   Wired to Node.js mpesa_stk.js server
 ═══════════════════════════════════════════════════ */
 
 'use strict';
@@ -111,11 +111,9 @@ function openPayModal(candidateId) {
   selectedCandidate = PAA.CANDIDATES.find(c => c.id === candidateId);
   if (!selectedCandidate) return;
 
-  // Stop any running timers from a previous attempt
-  stopAll();
+  MpesaService.stopAll();
   pendingVoteState = {};
 
-  // Reset UI to Step 1
   showStep('form');
   setProgressStep(1);
 
@@ -137,7 +135,7 @@ function openPayModal(candidateId) {
 }
 
 function closePayModal() {
-  stopAll();
+  MpesaService.stopAll();
   document.getElementById('pay-modal').classList.remove('open');
   selectedCandidate = null;
   pendingVoteState  = {};
@@ -178,19 +176,12 @@ function setAmount(amount) {
 /* ══════════════════════════════════════
    VALIDATE FORM
 ══════════════════════════════════════ */
-function formatPhone(raw) {
-  let p = raw.replace(/[\s\-\(\)]/g, '');
-  if (p.startsWith('0'))  p = '254' + p.slice(1);
-  if (p.startsWith('+'))  p = p.slice(1);
-  return /^254(7|1)\d{8}$/.test(p) ? p : null;
-}
-
 function validateForm() {
   const rawPhone = document.getElementById('voter-phone').value.trim();
   const amount   = parseInt(document.getElementById('vote-amount').value, 10);
   const name     = document.getElementById('voter-name').value.trim();
 
-  if (!formatPhone(rawPhone)) {
+  if (!MpesaService.formatPhone(rawPhone)) {
     Toast.show('Enter a valid Safaricom number (07XX or 01XX)', '⚠️');
     document.getElementById('voter-phone').focus();
     return false;
@@ -214,13 +205,13 @@ function validateForm() {
 }
 
 /* ══════════════════════════════════════
-   PAY BUTTON — fires real STK Push
+   PAY BUTTON — fires STK Push via Node.js
 ══════════════════════════════════════ */
 async function submitVote() {
   if (!validateForm() || !selectedCandidate) return;
 
   const rawPhone  = document.getElementById('voter-phone').value.trim();
-  const phone     = formatPhone(rawPhone);
+  const phone     = MpesaService.formatPhone(rawPhone);
   const amount    = parseInt(document.getElementById('vote-amount').value, 10);
   const voterName = document.getElementById('voter-name').value.trim();
   const votes     = Math.floor(amount / PAA.VOTE_COST);
@@ -230,49 +221,23 @@ async function submitVote() {
   btn.disabled  = true;
   btn.innerHTML = '<span class="btn-spinner"></span> Sending prompt…';
 
-  // ── Call mpesa_stk.php ───────────────────────────────────
-  let stkResult;
-  try {
-    const resp = await fetch('mpesa_stk.php', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action:        'stk_push',          // ← always send action
-        phone,
-        amount,
-        candidateId:   selectedCandidate.id,
-        candidateName: selectedCandidate.name,
-        voterName,
-        votes,
-      }),
-    });
+  // ── Call Node.js /mpesa/stk ──────────────────────────────
+  const stkResult = await MpesaService.initiateStkPush({
+    phone,
+    amount,
+    candidateId:   selectedCandidate.id,
+    candidateName: selectedCandidate.name,
+    voterName,
+    votes,
+  });
 
-    // Guard: if server returned HTML (404/500) instead of JSON, catch cleanly
-    const ct = resp.headers.get('content-type') || '';
-    if (!ct.includes('application/json')) {
-      const text = await resp.text();
-      console.error('mpesa_stk.php returned non-JSON:', text.slice(0, 300));
-      stkResult = {
-        success: false,
-        message: `Server error (HTTP ${resp.status}). Make sure mpesa_stk.php is on the server.`,
-      };
-    } else {
-      stkResult = await resp.json();
-    }
-
-  } catch (networkErr) {
-    console.error('Network error:', networkErr);
-    stkResult = { success: false, message: 'Network error — check your connection and try again.' };
-  }
-
-  // ── STK initiation failed ────────────────────────────────
   if (!stkResult.success) {
     Toast.show('❌ ' + (stkResult.message || 'Could not send M-Pesa prompt.'), '❌');
     resetPayBtn();
     return;
   }
 
-  // ── STK sent! Save pending state ─────────────────────────
+  // ── STK sent — save pending state ────────────────────────
   pendingVoteState = {
     checkoutRequestId: stkResult.checkoutRequestId,
     phone:    rawPhone,
@@ -291,97 +256,24 @@ async function submitVote() {
   document.getElementById('stk-vote-summary').textContent  =
     `KES ${amount} · ${votes} vote${votes !== 1 ? 's' : ''} for ${selectedCandidate.name}`;
 
-  // ── Poll for payment confirmation every 3s ───────────────
-  // FIX: was incorrectly calling 'mpesa_poll.php' — now uses mpesa_stk.php with action:'poll'
-  startPolling(stkResult.checkoutRequestId);
+  // ── Poll /mpesa/poll every 3s ─────────────────────────────
+  MpesaService.startPolling(
+    stkResult.checkoutRequestId,
+    (mpesaCode) => onPaymentSuccess(mpesaCode),
+    (status)    => onPaymentFailed(status)
+  );
 
-  // ── Countdown timer ──────────────────────────────────────
-  startCountdown();
-}
-
-/* ══════════════════════════════════════
-   POLLING — checks payment status
-   FIX: was fetching 'mpesa_poll.php' (wrong file, caused 404)
-        now fetches 'mpesa_stk.php' with action:'poll'
-══════════════════════════════════════ */
-let _pollTimer     = null;
-let _cdownTimer    = null;
-let _secondsLeft   = 120;
-
-function startPolling(checkoutRequestId) {
-  stopPolling();
-  _pollTimer = setInterval(async () => {
-    try {
-      const resp = await fetch('mpesa_stk.php', {          // ← FIXED: was 'mpesa_poll.php'
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'poll',                                   // ← FIXED: action was missing
-          checkoutRequestId,
-        }),
-      });
-
-      const ct = resp.headers.get('content-type') || '';
-      if (!ct.includes('application/json')) return;        // silent — keep polling
-
-      const data = await resp.json();
-
-      if (data.status === 'COMPLETED') {
-        stopAll();
-        onPaymentSuccess(data.mpesaCode || 'CONFIRMED');
-      } else if (data.status === 'FAILED' || data.status === 'CANCELLED') {
-        stopAll();
-        onPaymentFailed(data.status);
-      }
-      // PENDING → keep polling
-    } catch (e) {
-      // network hiccup — keep trying silently
-    }
-  }, 3000);
-}
-
-function stopPolling() {
-  clearInterval(_pollTimer);
-  _pollTimer = null;
-}
-
-/* ══════════════════════════════════════
-   COUNTDOWN TIMER
-══════════════════════════════════════ */
-function startCountdown() {
-  _secondsLeft = 120;
-  stopCountdown();
-
-  const el = document.getElementById('stk-countdown');
-  const mc = document.getElementById('manual-confirm-section');
-  if (el) el.textContent = _secondsLeft;
-  if (mc) mc.style.display = 'none';
-
-  _cdownTimer = setInterval(() => {
-    _secondsLeft--;
-    if (el) el.textContent = _secondsLeft;
-
-    // Show manual code entry after 30s
-    if (_secondsLeft === 30 && mc) mc.style.display = '';
-
-    if (_secondsLeft <= 0) {
-      stopAll();
+  // ── Countdown (shows manual fallback after 30s) ───────────
+  MpesaService.startCountdown(
+    'stk-countdown',
+    document.getElementById('manual-confirm-section'),
+    () => {
       Toast.show('⏱ Prompt expired — please try again.', '⏱');
       showStep('form');
       setProgressStep(1);
       resetPayBtn();
     }
-  }, 1000);
-}
-
-function stopCountdown() {
-  clearInterval(_cdownTimer);
-  _cdownTimer = null;
-}
-
-function stopAll() {
-  stopPolling();
-  stopCountdown();
+  );
 }
 
 /* ══════════════════════════════════════
@@ -390,10 +282,8 @@ function stopAll() {
 function onPaymentSuccess(mpesaCode) {
   const s = pendingVoteState;
 
-  // Record vote locally (localStorage)
   Store.recordVote(s.voterName, s.candidateId, s.amount, mpesaCode);
 
-  // Fill success details
   document.getElementById('s-candidate').textContent = s.candidateName;
   document.getElementById('s-votes').textContent     = `+${s.votes} vote${s.votes !== 1 ? 's' : ''}`;
   document.getElementById('s-amount').textContent    = `KES ${s.amount}`;
@@ -433,33 +323,19 @@ async function submitManualCode() {
   btn.disabled    = true;
   btn.textContent = 'Verifying…';
 
-  let res;
-  try {
-    const resp = await fetch('mpesa_stk.php', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action:            'manual_confirm',
-        mpesaCode:         code,
-        checkoutRequestId: pendingVoteState.checkoutRequestId,
-        candidateId:       pendingVoteState.candidateId,
-        candidateName:     pendingVoteState.candidateName,
-        votes:             pendingVoteState.votes,
-        amount:            pendingVoteState.amount,
-        voterName:         pendingVoteState.voterName,
-        phone:             formatPhone(pendingVoteState.phone) || pendingVoteState.phone,
-      }),
-    });
-    const ct = resp.headers.get('content-type') || '';
-    res = ct.includes('application/json')
-      ? await resp.json()
-      : { success: false, message: 'Server error verifying code.' };
-  } catch (e) {
-    res = { success: false, message: 'Network error. Please try again.' };
-  }
+  const res = await MpesaService.manualConfirm({
+    mpesaCode:         code,
+    checkoutRequestId: pendingVoteState.checkoutRequestId,
+    candidateId:       pendingVoteState.candidateId,
+    candidateName:     pendingVoteState.candidateName,
+    votes:             pendingVoteState.votes,
+    amount:            pendingVoteState.amount,
+    voterName:         pendingVoteState.voterName,
+    phone:             MpesaService.formatPhone(pendingVoteState.phone) || pendingVoteState.phone,
+  });
 
   if (res.success) {
-    stopAll();
+    MpesaService.stopAll();
     onPaymentSuccess(code);
   } else {
     Toast.show('❌ ' + (res.message || 'Could not verify code. Try again.'), '❌');
@@ -493,7 +369,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('cancel-stk-btn')
     .addEventListener('click', () => {
-      stopAll();
+      MpesaService.stopAll();
       showStep('form');
       setProgressStep(1);
       resetPayBtn();
