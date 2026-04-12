@@ -1,6 +1,7 @@
 /* ═══════════════════════════════════════════════════
    PRESIDENTIAL ANNUAL AWARDS — data.js
    Shared data store, utilities & state management
+   Updated for Node.js backend (mpesa_stk.js)
 ═══════════════════════════════════════════════════ */
 
 'use strict';
@@ -15,11 +16,12 @@ const PAA = {
   ADMIN_PASS:  'paa2025',
   STORAGE_KEY: 'paa_data_v2',
 
-  /* ── M-Pesa API endpoints — all handled by ONE file ── */
-  STK_ENDPOINT:  'mpesa_stk.php',
-  POLL_ENDPOINT: 'mpesa_stk.php',  // same file, action='poll'
-  POLL_INTERVAL: 3000,   // ms between status checks
-  STK_TIMEOUT:   120,    // seconds before showing manual fallback
+  /* ── Node.js API endpoints ── */
+  STK_ENDPOINT:    '/mpesa/stk',            // POST — initiate STK push
+  POLL_ENDPOINT:   '/mpesa/poll',           // POST — check payment status
+  MANUAL_ENDPOINT: '/mpesa/manual-confirm', // POST — manual M-Pesa code entry
+  POLL_INTERVAL:   3000,                    // ms between status checks
+  STK_TIMEOUT:     120,                     // seconds before manual fallback shows
 
   CANDIDATES: [
     { id: 'mariga',    name: 'Mariga Strong',  initials: 'MS' },
@@ -108,41 +110,34 @@ const MpesaService = {
   _onFailure:      null,
 
   /**
-   * Initiate STK Push
-   * Calls mpesa_stk.php → returns { success, checkoutRequestId, message }
+   * Initiate STK Push via Node.js server
+   * POST /mpesa/stk → { success, checkoutRequestId, message }
    */
   async initiateStkPush({ phone, amount, candidateId, candidateName, voterName, votes }) {
-    const res = await fetch(PAA.STK_ENDPOINT, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        action:       'stk_push',
-        phone,
-        amount,
-        candidateId,
-        candidateName,
-        voterName,
-        votes,
-        paybill:      PAA.PAYBILL,
-        accountRef:   candidateName,
-        description:  `Vote ${candidateName}`,
-      }),
-    });
+    try {
+      const res = await fetch(PAA.STK_ENDPOINT, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ phone, amount, candidateId, candidateName, voterName, votes }),
+      });
 
-    /* Guard: if server returned HTML instead of JSON show clear error */
-    const contentType = res.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) {
-      const text = await res.text();
-      console.error('STK endpoint returned non-JSON:', text.slice(0, 200));
-      return { success: false, message: 'Server error — mpesa_stk.php not found or returned an error. Check your server setup.' };
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const text = await res.text();
+        console.error('STK endpoint returned non-JSON:', text.slice(0, 200));
+        return { success: false, message: `Server error (HTTP ${res.status}) — is mpesa_stk.js running?` };
+      }
+
+      return res.json();
+    } catch (err) {
+      console.error('initiateStkPush network error:', err);
+      return { success: false, message: 'Network error — make sure the Node.js server is running.' };
     }
-
-    return res.json();
   },
 
   /**
-   * Poll mpesa_poll.php every POLL_INTERVAL ms
-   * Calls onSuccess(mpesaCode) or onFailure()
+   * Poll /mpesa/poll every POLL_INTERVAL ms
+   * Calls onSuccess(mpesaCode) or onFailure(status)
    */
   startPolling(checkoutRequestId, onSuccess, onFailure) {
     this._checkoutId = checkoutRequestId;
@@ -157,11 +152,11 @@ const MpesaService = {
       const res = await fetch(PAA.POLL_ENDPOINT, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ action: 'poll', checkoutRequestId: this._checkoutId }),
+        body:    JSON.stringify({ checkoutRequestId: this._checkoutId }),
       });
 
       const contentType = res.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) return; // silent — keep polling
+      if (!contentType.includes('application/json')) return;
 
       const data = await res.json();
 
@@ -172,9 +167,8 @@ const MpesaService = {
         this.stopAll();
         this._onFailure && this._onFailure(data.status);
       }
-      // PENDING → keep polling
     } catch (e) {
-      // network hiccup — keep polling
+      // network hiccup — keep polling silently
     }
   },
 
@@ -194,8 +188,9 @@ const MpesaService = {
   },
 
   /**
-   * Start a visual countdown. After 30s shows manual-confirm fallback.
-   * After timeout calls onExpire().
+   * Start countdown timer.
+   * Shows manual-confirm section after 30s.
+   * Calls onExpire() at 0.
    */
   startCountdown(elId, manualConfirmEl, onExpire) {
     this._secondsLeft = PAA.STK_TIMEOUT;
@@ -208,7 +203,8 @@ const MpesaService = {
       this._secondsLeft--;
       if (el) el.textContent = this._secondsLeft;
 
-      if (this._secondsLeft === 30 && manualConfirmEl) {
+      // Show manual confirm after 30 seconds (when 90 remain of 120)
+      if (this._secondsLeft === 90 && manualConfirmEl) {
         manualConfirmEl.style.display = '';
       }
 
@@ -221,34 +217,30 @@ const MpesaService = {
 
   /**
    * Manual confirmation via M-Pesa code
+   * POST /mpesa/manual-confirm
    */
   async manualConfirm({ mpesaCode, checkoutRequestId, candidateId, candidateName, votes, amount, voterName, phone }) {
-    const res = await fetch(PAA.STK_ENDPOINT, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        action: 'manual_confirm',
-        mpesaCode,
-        checkoutRequestId,
-        candidateId,
-        candidateName,
-        votes,
-        amount,
-        voterName,
-        phone,
-      }),
-    });
+    try {
+      const res = await fetch(PAA.MANUAL_ENDPOINT, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ mpesaCode, checkoutRequestId, candidateId, candidateName, votes, amount, voterName, phone }),
+      });
 
-    const contentType = res.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) {
-      return { success: false, message: 'Server error — check mpesa_stk.php' };
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        return { success: false, message: 'Server error — check mpesa_stk.js' };
+      }
+      return res.json();
+    } catch (err) {
+      console.error('manualConfirm network error:', err);
+      return { success: false, message: 'Network error. Please try again.' };
     }
-    return res.json();
   },
 
   /** Format phone to Safaricom format: 2547XXXXXXXX */
   formatPhone(raw) {
-    let p = raw.replace(/[\s\-]/g, '');
+    let p = String(raw).replace(/[\s\-()]/g, '');
     if (p.startsWith('0'))  p = '254' + p.slice(1);
     if (p.startsWith('+'))  p = p.slice(1);
     if (/^254(7|1)\d{8}$/.test(p)) return p;
@@ -263,8 +255,8 @@ const Toast = {
   show(message, icon = '🗳', isError = false) {
     const el = document.getElementById('toast');
     if (!el) return;
-    el.querySelector('.toast-icon').textContent  = icon;
-    el.querySelector('.toast-msg').textContent   = message;
+    el.querySelector('.toast-icon').textContent = icon;
+    el.querySelector('.toast-msg').textContent  = message;
     el.classList.toggle('error', isError);
     el.classList.add('show');
     clearTimeout(this._timer);
@@ -284,8 +276,8 @@ const Auth = {
     return false;
   },
 
-  logout()    { sessionStorage.removeItem(this.SESSION_KEY); },
-  isLoggedIn(){ return sessionStorage.getItem(this.SESSION_KEY) === '1'; },
+  logout()     { sessionStorage.removeItem(this.SESSION_KEY); },
+  isLoggedIn() { return sessionStorage.getItem(this.SESSION_KEY) === '1'; },
 };
 
 /* ── FORMAT HELPERS ── */
