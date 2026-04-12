@@ -1,0 +1,16 @@
+{
+  "name": "presidential-annual-awards",
+  "version": "1.0.0",
+  "description": "Presidential Annual Awards — M-Pesa voting server",
+  "main": "mpesa_stk.js",
+  "scripts": {
+    "start": "node mpesa_stk.js",
+    "dev": "npx nodemon mpesa_stk.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "better-sqlite3": "^9.6.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}
