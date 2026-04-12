@@ -1,11 +1,9 @@
-
-
 <?php
 // ============================================================
 // mpesa_stk.php — Single-file M-Pesa Handler
 // Presidential Annual Awards
 // Handles: STK Push initiation + status poll + manual confirm
-// PUT THIS FILE in the SAME FOLDER as vote.html
+// PUT THIS FILE in the SAME FOLDER as vote.html / index.html
 // ============================================================
 
 // ── Always return JSON, never HTML ──────────────────────────
@@ -51,10 +49,16 @@ $raw     = file_get_contents('php://input');
 $payload = json_decode($raw, true);
 
 if (!$payload) {
-    echo json_encode(['success' => false, 'message' => 'Invalid request body']);
-    exit;
+    // Also accept GET ?action=callback for Safaricom callback
+    if (!empty($_GET['action'])) {
+        $payload = ['action' => $_GET['action']];
+    } else {
+        echo json_encode(['success' => false, 'message' => 'Invalid request body']);
+        exit;
+    }
 }
 
+// FIX: action now correctly read — defaults to 'stk_push' only if missing
 $action = $payload['action'] ?? 'stk_push';
 
 // ============================================================
@@ -79,7 +83,7 @@ try {
             break;
 
         default:
-            echo json_encode(['success' => false, 'message' => 'Unknown action: ' . $action]);
+            echo json_encode(['success' => false, 'message' => 'Unknown action: ' . htmlspecialchars($action)]);
     }
 } catch (Throwable $e) {
     echo json_encode(['success' => false, 'message' => 'Server error: ' . $e->getMessage()]);
@@ -138,6 +142,9 @@ function handleStkPush($p, $baseUrl, $key, $secret, $shortcode, $passkey, $callb
     $timestamp = date('YmdHis');
     $password  = base64_encode($shortcode . $passkey . $timestamp);
 
+    // FIX: callback URL action param properly appended
+    $callbackWithAction = rtrim($callbackUrl, '?') . (strpos($callbackUrl, '?') !== false ? '&' : '?') . 'action=callback';
+
     $body = [
         'BusinessShortCode' => $shortcode,
         'Password'          => $password,
@@ -147,7 +154,7 @@ function handleStkPush($p, $baseUrl, $key, $secret, $shortcode, $passkey, $callb
         'PartyA'            => $phone,
         'PartyB'            => $shortcode,
         'PhoneNumber'       => $phone,
-        'CallBackURL'       => $callbackUrl . '?action=callback',
+        'CallBackURL'       => $callbackWithAction,
         'AccountReference'  => substr($candidateName, 0, 12),
         'TransactionDesc'   => 'Vote',
     ];
@@ -206,6 +213,8 @@ function handleStkPush($p, $baseUrl, $key, $secret, $shortcode, $passkey, $callb
 
 // ============================================================
 // FUNCTION: Poll payment status
+// FIX: this action was never reachable before because vote.js
+//      was calling a non-existent mpesa_poll.php file
 // ============================================================
 function handlePoll($p, $baseUrl, $key, $secret, $shortcode, $passkey, $useDb, $dbFile) {
     $checkoutId = trim($p['checkoutRequestId'] ?? '');
@@ -214,11 +223,13 @@ function handlePoll($p, $baseUrl, $key, $secret, $shortcode, $passkey, $useDb, $
         return;
     }
 
-    // Check SQLite first (fastest)
+    // Check SQLite first (fastest path)
     if ($useDb) {
         $db = openDb($dbFile);
         if ($db) {
-            $row = $db->query("SELECT status, mpesa_code, votes FROM transactions WHERE checkout_id = " . $db->quote($checkoutId))->fetch(PDO::FETCH_ASSOC);
+            $stmt = $db->prepare("SELECT status, mpesa_code, votes FROM transactions WHERE checkout_id = ?");
+            $stmt->execute([$checkoutId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
             if ($row) {
                 if ($row['status'] === 'COMPLETED') {
                     echo json_encode(['status' => 'COMPLETED', 'mpesaCode' => $row['mpesa_code']]);
@@ -232,7 +243,7 @@ function handlePoll($p, $baseUrl, $key, $secret, $shortcode, $passkey, $useDb, $
         }
     }
 
-    // Query Safaricom API
+    // Query Safaricom STK Query API
     $token = getToken($baseUrl, $key, $secret);
     if (!$token) {
         echo json_encode(['status' => 'PENDING']); // keep polling
@@ -275,7 +286,8 @@ function handlePoll($p, $baseUrl, $key, $secret, $shortcode, $passkey, $useDb, $
             if ($useDb) {
                 $db = openDb($dbFile);
                 if ($db) {
-                    $db->exec("UPDATE transactions SET status='COMPLETED' WHERE checkout_id = " . $db->quote($checkoutId));
+                    $stmt = $db->prepare("UPDATE transactions SET status='COMPLETED' WHERE checkout_id = ?");
+                    $stmt->execute([$checkoutId]);
                     addVotes($db, $checkoutId);
                 }
             }
@@ -284,11 +296,14 @@ function handlePoll($p, $baseUrl, $key, $secret, $shortcode, $passkey, $useDb, $
         }
 
         if ($rc !== '') {
-            // Any non-0 result = failed
+            // Any non-empty non-0 result = failed/cancelled
             $newStatus = ($rc === '1032') ? 'CANCELLED' : 'FAILED';
             if ($useDb) {
                 $db = openDb($dbFile);
-                if ($db) $db->exec("UPDATE transactions SET status='$newStatus' WHERE checkout_id = " . $db->quote($checkoutId));
+                if ($db) {
+                    $stmt = $db->prepare("UPDATE transactions SET status=? WHERE checkout_id = ?");
+                    $stmt->execute([$newStatus, $checkoutId]);
+                }
             }
             echo json_encode(['status' => $newStatus]);
             return;
@@ -313,7 +328,8 @@ function handleManualConfirm($p, $useDb, $dbFile) {
     if ($useDb) {
         $db = openDb($dbFile);
         if ($db) {
-            $db->exec("UPDATE transactions SET status='COMPLETED', mpesa_code=" . $db->quote($code) . " WHERE checkout_id = " . $db->quote($checkoutId));
+            $stmt = $db->prepare("UPDATE transactions SET status='COMPLETED', mpesa_code=? WHERE checkout_id = ?");
+            $stmt->execute([$code, $checkoutId]);
             addVotes($db, $checkoutId);
         }
     }
@@ -346,11 +362,13 @@ function handleCallback($payload, $useDb, $dbFile) {
                 foreach ($items as $item) {
                     if ($item['Name'] === 'MpesaReceiptNumber') $mpesaCode = $item['Value'] ?? '';
                 }
-                $db->exec("UPDATE transactions SET status='COMPLETED', mpesa_code=" . $db->quote($mpesaCode) . " WHERE checkout_id = " . $db->quote($checkoutId));
+                $stmt = $db->prepare("UPDATE transactions SET status='COMPLETED', mpesa_code=? WHERE checkout_id = ?");
+                $stmt->execute([$mpesaCode, $checkoutId]);
                 addVotes($db, $checkoutId);
             } else {
                 $status = ($resultCode === 1032) ? 'CANCELLED' : 'FAILED';
-                $db->exec("UPDATE transactions SET status='$status' WHERE checkout_id = " . $db->quote($checkoutId));
+                $stmt = $db->prepare("UPDATE transactions SET status=? WHERE checkout_id = ?");
+                $stmt->execute([$status, $checkoutId]);
             }
         }
     }
@@ -399,11 +417,21 @@ function openDb($file) {
 }
 
 function addVotes($db, $checkoutId) {
-    $row = $db->query("SELECT candidate_id, candidate_name, votes FROM transactions WHERE checkout_id = " . $db->quote($checkoutId))->fetch(PDO::FETCH_ASSOC);
+    // FIX: replaced raw $db->quote() string interpolation with prepared statement
+    $stmt = $db->prepare("SELECT candidate_id, candidate_name, votes FROM transactions WHERE checkout_id = ?");
+    $stmt->execute([$checkoutId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$row) return;
-    $db->exec("
+
+    $upsert = $db->prepare("
         INSERT INTO candidate_votes (candidate_id, candidate_name, total_votes)
-        VALUES (" . $db->quote($row['candidate_id']) . ", " . $db->quote($row['candidate_name']) . ", " . (int)$row['votes'] . ")
-        ON CONFLICT(candidate_id) DO UPDATE SET total_votes = total_votes + " . (int)$row['votes']
-    );
+        VALUES (?, ?, ?)
+        ON CONFLICT(candidate_id) DO UPDATE SET total_votes = total_votes + ?
+    ");
+    $upsert->execute([
+        $row['candidate_id'],
+        $row['candidate_name'],
+        (int)$row['votes'],
+        (int)$row['votes'],
+    ]);
 }
